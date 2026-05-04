@@ -5,7 +5,7 @@
  */
 
 import { loadAsAdopted, removeAdopted } from "fest/dom";
-import { type BaseViewOptions } from "../types";
+import { type BaseViewOptions } from "views/types";
 import { WorkCenterManager } from "./ts/WorkCenter";
 import type { WorkCenterDependencies } from "./ts/WorkCenterState";
 
