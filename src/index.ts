@@ -111,9 +111,6 @@ export class WorkCenterView extends UIElement implements View {
             this.shellContext = options.shellContext || this.shellContext;
         }
 
-        this._sheet = loadAsAdopted(workcenterStyles) as CSSStyleSheet;
-        this.ensureWorkCenterStylesOnShadow();
-
         this.manager ??= new WorkCenterManager(this.deps);
         if (!this.initializedFromOptions) {
             this.applyInitialOptions();
@@ -406,12 +403,21 @@ export class WorkCenterView extends UIElement implements View {
         this.manager = null;
         if (this._sheet) {
             removeAdopted(this._sheet);
+            try {
+                const sr = this.shadowRoot;
+                if (sr?.adoptedStyleSheets?.length && this._sheet && sr.adoptedStyleSheets.includes(this._sheet)) {
+                    sr.adoptedStyleSheets = [...sr.adoptedStyleSheets].filter((s) => s !== this._sheet);
+                }
+            } catch {
+                /* ignore */
+            }
         }
         this._sheet = null;
     }
 
     private onShow(): void {
         this._sheet ??= loadAsAdopted(workcenterStyles) as CSSStyleSheet;
+        this.ensureWorkCenterStylesOnShadow();
         if (this.pendingRenderAfterMount) {
             this.pendingRenderAfterMount = false;
             this.requestRender();
@@ -420,7 +426,18 @@ export class WorkCenterView extends UIElement implements View {
     }
 
     private onHide(): void {
-        // Keep DOM and manager state alive while hidden.
+        if (this._sheet) {
+            removeAdopted(this._sheet);
+            try {
+                const sr = this.shadowRoot;
+                if (sr?.adoptedStyleSheets?.length && this._sheet && sr.adoptedStyleSheets.includes(this._sheet)) {
+                    sr.adoptedStyleSheets = [...sr.adoptedStyleSheets].filter((s) => s !== this._sheet);
+                }
+            } catch {
+                /* ignore */
+            }
+            this._sheet = null;
+        }
     }
 
 }
