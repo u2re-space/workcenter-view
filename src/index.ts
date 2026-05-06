@@ -14,6 +14,31 @@ import workcenterStyles from "./scss/_index.scss?inline";
 import { defineElement } from "fest/lure";
 import { UIElement } from "fest/fl-ui";
 
+/**
+ * WHY: `document.adoptedStyleSheets` entries are global; closing one floating window must not unmount styles for another.
+ * WHY: `mountViewModule` runs `render()` before `connectedCallback`/`onMount`, so consumers may attach DOM before CE lifecycle runs.
+ */
+const workcenterDocumentStyles = (() => {
+    let consumers = 0;
+    let sheet: CSSStyleSheet | null = null;
+    return {
+        acquire(): CSSStyleSheet | null {
+            const next = loadAsAdopted(workcenterStyles) as CSSStyleSheet | null;
+            if (next) sheet = next;
+            if (sheet) consumers += 1;
+            return sheet;
+        },
+        release(): void {
+            if (consumers <= 0 || !sheet) return;
+            consumers -= 1;
+            if (consumers === 0) {
+                removeAdopted(sheet);
+                sheet = null;
+            }
+        }
+    };
+})();
+
 export interface WorkCenterOptions extends BaseViewOptions {
     initialFiles?: File[];
     initialPrompt?: string;
@@ -56,6 +81,8 @@ export class WorkCenterView extends UIElement implements View {
     private _sheet: CSSStyleSheet | null = null;
     private readonly autoFileFingerprints = new Set<string>();
     private pendingMessages: WorkCenterInboundMessage[] = [];
+    /** True after this instance acquired a refcount on the shared workcenter document stylesheet. */
+    private leasedDocumentStyles = false;
 
     lifecycle: ViewLifecycle = {
         onMount: () => this.onMount(),
@@ -87,9 +114,19 @@ export class WorkCenterView extends UIElement implements View {
         return Boolean(arg && typeof (arg as WeakRef<HTMLElement>).deref === "function");
     }
 
+    /** Ensure constructable sheet is on `document` and optional CE shadow (standalone embedded host). */
+    private leaseWorkCenterDocumentStyles(): CSSStyleSheet | null {
+        if (this.leasedDocumentStyles) return this._sheet;
+        const sheet = workcenterDocumentStyles.acquire();
+        if (sheet) {
+            this._sheet = sheet;
+            this.leasedDocumentStyles = true;
+        }
+        return sheet;
+    }
+
     private ensureWorkCenterStylesOnShadow(): void {
-        const sheet = loadAsAdopted(workcenterStyles) as CSSStyleSheet | null;
-        if (sheet) this._sheet = sheet;
+        const sheet = this.leaseWorkCenterDocumentStyles();
         const root = this.shadowRoot;
         if (!sheet || !root?.adoptedStyleSheets) return;
         if (!root.adoptedStyleSheets.includes(sheet)) {
@@ -116,6 +153,9 @@ export class WorkCenterView extends UIElement implements View {
             this.applyInitialOptions();
             this.initializedFromOptions = true;
         }
+
+        /* WHY: Window-frame path never connects `cw-workcenter-view`, so `onInitialize`/`onMount` run only after this subtree exists unless we load early. */
+        this.leaseWorkCenterDocumentStyles();
 
         this.element = this.manager.renderWorkCenterView();
         this.syncPromptInputFromState();
@@ -393,7 +433,7 @@ export class WorkCenterView extends UIElement implements View {
     }
 
     private onMount(): void {
-        this._sheet ??= loadAsAdopted(workcenterStyles) as CSSStyleSheet;
+        this.leaseWorkCenterDocumentStyles();
     }
 
     private onUnmount(): void {
@@ -401,22 +441,24 @@ export class WorkCenterView extends UIElement implements View {
         this.resultObserver = null;
         this.manager?.destroy();
         this.manager = null;
-        if (this._sheet) {
-            removeAdopted(this._sheet);
+        if (this.leasedDocumentStyles) {
             try {
                 const sr = this.shadowRoot;
-                if (sr?.adoptedStyleSheets?.length && this._sheet && sr.adoptedStyleSheets.includes(this._sheet)) {
-                    sr.adoptedStyleSheets = [...sr.adoptedStyleSheets].filter((s) => s !== this._sheet);
+                const sh = this._sheet;
+                if (sr?.adoptedStyleSheets?.length && sh && sr.adoptedStyleSheets.includes(sh)) {
+                    sr.adoptedStyleSheets = [...sr.adoptedStyleSheets].filter((s) => s !== sh);
                 }
             } catch {
                 /* ignore */
             }
+            workcenterDocumentStyles.release();
+            this.leasedDocumentStyles = false;
         }
         this._sheet = null;
     }
 
     private onShow(): void {
-        this._sheet ??= loadAsAdopted(workcenterStyles) as CSSStyleSheet;
+        this.leaseWorkCenterDocumentStyles();
         this.ensureWorkCenterStylesOnShadow();
         if (this.pendingRenderAfterMount) {
             this.pendingRenderAfterMount = false;
@@ -426,18 +468,7 @@ export class WorkCenterView extends UIElement implements View {
     }
 
     private onHide(): void {
-        if (this._sheet) {
-            removeAdopted(this._sheet);
-            try {
-                const sr = this.shadowRoot;
-                if (sr?.adoptedStyleSheets?.length && this._sheet && sr.adoptedStyleSheets.includes(this._sheet)) {
-                    sr.adoptedStyleSheets = [...sr.adoptedStyleSheets].filter((s) => s !== this._sheet);
-                }
-            } catch {
-                /* ignore */
-            }
-            this._sheet = null;
-        }
+        /* WHY: Do not remove document adopted sheet here — `onUnmount` refcount handles teardown; other windows may still need it. */
     }
 
 }

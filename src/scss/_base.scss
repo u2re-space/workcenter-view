@@ -46,6 +46,51 @@
             max-inline-size: 100%;
         }
 
+        /*
+         * WHY: Chromium’s native select paints flat square controls; strip UA chrome so tokens, radius, and
+         * chevron match tabs/buttons. Option list popup stays OS-native.
+         */
+        select {
+            appearance: none;
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            margin: 0;
+            border: 1px solid var(--color-outline-variant);
+            border-radius: var(--radius-md);
+            background-color: var(--color-surface-container);
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24' fill='none'%3E%3Cpath stroke='%2394a3b8' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right var(--space-sm) center;
+            background-size: 1rem 1rem;
+            color: var(--color-on-surface);
+            cursor: pointer;
+            padding-block: var(--space-sm);
+            padding-inline: var(--space-sm) 2rem;
+            font-family: inherit;
+            transition:
+                border-color var(--motion-fast, 0.15s ease),
+                background-color var(--motion-fast, 0.15s ease);
+
+            &:hover {
+                border-color: color-mix(in oklab, var(--color-primary) 35%, var(--color-outline-variant));
+                background-color: var(--color-surface-container-high);
+            }
+
+            &:focus {
+                outline: none;
+            }
+
+            &:focus-visible {
+                border-color: var(--color-primary);
+                box-shadow: 0 0 0 2px color-mix(in oklab, var(--color-primary) 28%, transparent);
+            }
+
+            &:disabled {
+                opacity: 0.55;
+                cursor: not-allowed;
+            }
+        }
+
         button {
             flex-wrap: nowrap;
             text-wrap: nowrap;

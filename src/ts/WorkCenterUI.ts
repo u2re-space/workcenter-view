@@ -49,7 +49,8 @@ export class WorkCenterUI {
 
     /** Render the top-level Work Center layout and wire child modules to the new container. */
     renderWorkCenterView(state: WorkCenterState): HTMLElement {
-        const container = H`<div class="workcenter-view">
+        /* data-view: enables `view.workcenter` token layer `:has([data-view="workcenter"])` when mounted as light DOM (window-frame). */
+        const container = H`<div class="workcenter-view" data-view="workcenter">
       <div class="workcenter-header">
         <h2>AI Work Center</h2>
         <div class="header-controls" aria-label="AI work center output and processing options">
