@@ -3,8 +3,10 @@
     .prompt-panel {
         block-size: stretch;
         max-block-size: stretch;
-        min-block-size: fit-content;
-        flex-basis: fit-content;
+        /** WHY: `.tab-panel > *` in `_layout` uses `flex-basis: 0` so the prompt fills the tab and the textarea shrinks — but `view.workcenter.components` overrides `layout`, so keep `flex-basis: 0` here too. `fit-content` made the panel as tall as its content and the footer was clipped (`tab-panel.is-active { overflow: hidden }`). */
+        min-block-size: 0;
+        min-inline-size: 0;
+        flex-basis: 0;
         flex-shrink: 1;
         flex-grow: 1;
     }
@@ -201,12 +203,13 @@
 
     .prompt-input {
         inline-size: stretch;
-        block-size: stretch;
-        max-block-size: stretch;
-        min-block-size: calc-size(min-content, min(size, 100%));
-        flex-basis: min-content;
-        flex-grow: 1;
+        /** Scroll inside the shrinking flex region instead of growing past the viewport */
+        block-size: 100%;
+        max-block-size: 100%;
+        min-block-size: 0;
+        flex: 1 1 auto;
         flex-shrink: 1;
+        flex-basis: 0;
         padding: var(--space-sm) var(--space-md);
         border: 1px solid var(--color-outline-variant);
         border-radius: var(--radius-md);
@@ -216,6 +219,7 @@
         font-size: var(--text-sm);
         line-height: var(--leading-relaxed);
         resize: vertical;
+        overflow-y: auto;
         scrollbar-width: thin;
         scrollbar-color: var(--color-outline-variant) transparent;
 
@@ -299,12 +303,13 @@
         gap: var(--space-xl);
         block-size: stretch;
         max-block-size: stretch;
-        min-block-size: calc-size(min-content, min(size, 100%));
-        flex-basis: fit-content;
-        flex-grow: 1;
-        /*flex-shrink: 0;*/
+        min-block-size: 0;
+        min-inline-size: 0;
+        /** WHY: Consume remaining column height (`flex-basis:0`) instead of insisting on textarea min-height and shoving footer actions off-screen */
+        flex: 1 1 auto;
+        flex-basis: 0;
         place-content: center;
-        place-items: center;
+        place-items: stretch;
 
         &[data-dropzone] {
             position: relative;
@@ -506,11 +511,10 @@
         }
     }
 
+    /** Grid toolbar: legacy `action-section` / `prompt-section` / `prompts-section`. Not `.prompt-panel` (tabbed Prompt chrome) — avoids `display: grid` fighting flex and clipping the execute row. */
     .action-section,
     .prompt-section,
-    .prompts-section,
-    /*.prompts-column,*/
-    .prompt-panel {
+    .prompts-section {
         background: var(--color-surface-container-low);
         border-radius: var(--radius-lg);
         padding: var(--space-lg);
@@ -522,12 +526,14 @@
         .prompt-actions {
             display: grid;
             grid-template-columns: minmax(0px, 1fr) minmax(0px, max-content);
-            grid-template-rows: minmax(max-content, 1fr) minmax(max-content, 1fr);
+            grid-template-rows: auto auto;
             gap: var(--space-md);
-            place-self: center;
-            min-inline-size: max-content;
-            max-inline-size: stretch;
-            inline-size: max(60cqi, min(24rem, 100%));
+            place-self: stretch;
+            align-self: stretch;
+            min-inline-size: 0;
+            max-inline-size: 100%;
+            inline-size: 100%;
+            box-sizing: border-box;
             place-items: center;
             place-content: stretch;
 
@@ -788,6 +794,24 @@
         }
     }
 
+    .prompt-panel {
+        background: var(--color-surface-container-low);
+        border-radius: var(--radius-lg);
+        padding: var(--space-lg);
+        border: 1px solid var(--color-outline-variant);
+        place-content: center;
+        place-items: center;
+        align-items: stretch;
+
+        @container (max-inline-size: 1024px) {
+            padding: var(--space-md);
+        }
+
+        @container (max-inline-size: 768px) {
+            padding: var(--space-sm);
+        }
+    }
+
     .wc-block-header {
         display: flex;
         align-items: center;
@@ -823,6 +847,8 @@
         display: flex;
         flex-direction: column;
         gap: var(--space-md);
+        min-inline-size: 0;
+        min-block-size: 0;
     }
 
     .instruction-panel {
@@ -836,10 +862,45 @@
     }
 
     .prompt-panel {
-        .prompt-actions {
-            flex-wrap: wrap;
-            gap: var(--space-sm);
+        > .prompt-controls {
+            flex: 0 0 auto;
+        }
+
+        > .prompt-input-group {
+            flex: 1 1 auto;
+            flex-basis: 0;
+            min-block-size: 0;
+            min-inline-size: 0;
+            overflow: hidden;
+        }
+
+        > .prompt-actions {
+            /** WHY: Earlier rules set `display:grid` + `min-inline-size:max-content` which never shrinks on narrow viewports; flex keeps controls on-screen */
+            display: flex;
+            flex-flow: row wrap;
             align-items: center;
+            justify-content: flex-start;
+            gap: var(--space-sm);
+            flex: 0 0 auto;
+            flex-grow: 0;
+            flex-shrink: 0;
+            margin-block-start: auto;
+            inline-size: 100%;
+            max-inline-size: 100%;
+            min-inline-size: 0;
+            box-sizing: border-box;
+            padding-block-end: max(var(--space-xs), env(safe-area-inset-bottom, 0px));
+            grid-template-columns: unset;
+            grid-template-rows: unset;
+            place-self: stretch;
+            align-content: flex-start;
+            justify-content: flex-start;
+            place-items: center;
+
+            > * {
+                grid-column: unset;
+                grid-row: unset;
+            }
         }
 
         .prompt-attach-btn,

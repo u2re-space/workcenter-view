@@ -3,9 +3,11 @@
     .workcenter-content {
         flex: 1;
         min-block-size: 0;
-        contain: strict;
+        /** NOTE: `contain: strict` + nested `stretch`/`calc-size()` min-heights stranded the Prompt footer below the clipped region on narrow viewports */
+        contain: layout;
         max-block-size: stretch;
         block-size: stretch;
+        min-inline-size: 0;
     }
 
     .workcenter-layout {
@@ -73,6 +75,8 @@
         place-content: stretch;
         place-items: stretch;
         max-block-size: stretch;
+        flex-shrink: 1;
+        flex-basis: fit-content;
     }
 
     .input-tabs-section,
@@ -80,13 +84,15 @@
         block-size: stretch;
         max-block-size: stretch;
         flex-grow: 1;
-        flex-shrink: 0;
-        flex-basis: fit-content;
+        flex-shrink: 1;
+        flex-basis: 0;
         display: flex;
         flex-direction: column;
         overflow: hidden;
         gap: var(--space-xs);
         flex-wrap: nowrap;
+        min-block-size: 0;
+        min-inline-size: 0;
     }
 
     .input-tab-actions,
@@ -136,11 +142,11 @@
         min-block-size: 0;
         flex-grow: 1;
         flex-shrink: 1;
-        flex-basis: fit-content;
+        flex-basis: 0;
         block-size: stretch;
         max-block-size: stretch;
-        min-block-size: min(12rem, 100%);
         inline-size: stretch;
+        min-inline-size: 0;
         place-content: stretch;
         place-items: stretch;
         justify-content: stretch;
@@ -149,20 +155,30 @@
         justify-items: stretch;
     }
 
+    /** Allow the Prompt tab chrome to scroll internally instead of overflowing past the iframe/viewport chrome */
+    .input-tab-panels {
+        overflow-y: auto;
+        overflow-x: hidden;
+        scrollbar-gutter: stable;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    /** Results pane keeps prior min-height heuristic (desktop cards). */
     .results-tab-panels {
-        min-block-size: calc-size(fit-content, min(size, 100%));
+        flex-basis: fit-content;
+        min-block-size: min(12rem, 100%);
     }
 
     .tab-panel,
     .results-tab-panel {
         display: none;
         min-inline-size: 0;
+        min-block-size: 0;
         block-size: stretch;
-        min-block-size: calc-size(fit-content, min(size, 100%));
         max-block-size: stretch;
-        flex-basis: fit-content;
         flex-grow: 1;
         flex-shrink: 1;
+        flex-basis: 0;
         inline-size: stretch;
         place-content: stretch;
         place-items: stretch;
@@ -174,14 +190,28 @@
         &.is-active {
             display: flex;
             flex-direction: column;
+            overflow: hidden;
         }
 
         & > * {
             inline-size: stretch;
-            flex-grow: 1;
             flex-shrink: 1;
-            flex-basis: fit-content;
+            flex-basis: 0;
+            min-block-size: 0;
+            min-inline-size: 0;
             max-block-size: stretch;
+            flex-grow: 1;
+        }
+    }
+
+    /** Pipeline / history shells still prefer content-sized growth */
+    .results-tab-panel {
+        flex-basis: fit-content;
+
+        &[data-results-tab-panel="output"] > *,
+        &[data-results-tab-panel="pipeline"] > *,
+        &[data-results-tab-panel="history"] > * {
+            flex-basis: fit-content;
         }
     }
 
