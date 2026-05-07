@@ -150,8 +150,8 @@ export class WorkCenterShareTarget {
                 ...attachmentFiles
             ];
             if (incomingFiles.length > 0) {
-                for (const file of inputData.files) {
-                    const normalized = await normalizeIncomingFile(file);
+                for (const raw of incomingFiles) {
+                    const normalized = await normalizeIncomingFile(raw);
                     if (normalized && pushUniqueFile(normalized)) {
                         filesAdded++;
                     }

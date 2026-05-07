@@ -57,6 +57,7 @@ type WorkCenterMessageData = {
 };
 
 type WorkCenterInboundMessage = {
+    id?: string;
     type?: string;
     contentType?: string;
     data?: WorkCenterMessageData;
@@ -80,6 +81,7 @@ export class WorkCenterView extends UIElement implements View {
     private resultObserver: MutationObserver | null = null;
     private _sheet: CSSStyleSheet | null = null;
     private readonly autoFileFingerprints = new Set<string>();
+    private processedInboundMessageIds = new Set<string>();
     private pendingMessages: WorkCenterInboundMessage[] = [];
     /** True after this instance acquired a refcount on the shared workcenter document stylesheet. */
     private leasedDocumentStyles = false;
@@ -161,10 +163,14 @@ export class WorkCenterView extends UIElement implements View {
         this.syncPromptInputFromState();
         this.setupProcessResultObserver();
         this.emitFilesChanged();
-        void this.flushPendingMessages();
+        /**
+         * Defer ingress to `onShow`/rAF — not `queueMicrotask` before shell attach — so `requestRender`
+         * handlers see a connected root. WHY: flushing here triggered `replaceChild` upgrades while `ShellBase`
+         * still caches the pre-replacement node, breaking reopen/navigation (`loadedViews.element` stale).
+         */
         return this.element;
     };
-    
+
     getToolbar(): HTMLElement | null {
         return null;
     }
@@ -307,8 +313,25 @@ export class WorkCenterView extends UIElement implements View {
     private async handleMessageWithManager(msg: WorkCenterInboundMessage): Promise<void> {
         if (!this.manager) return;
 
-        if (msg.type === "share-target-input" || msg.type === "share-target-result" || msg.type === "ai-result" || msg.type === "content-share") {
-            await this.manager.handleExternalMessage(msg);
+        const mid = typeof msg.id === "string" ? msg.id.trim() : "";
+        if (mid) {
+            if (this.processedInboundMessageIds.has(mid)) return;
+            this.processedInboundMessageIds.add(mid);
+            if (this.processedInboundMessageIds.size > 256) {
+                const iter = this.processedInboundMessageIds.values().next();
+                if (!iter.done) this.processedInboundMessageIds.delete(iter.value);
+            }
+        }
+
+        if (msg.type === "share-target-input" || msg.type === "share-target-result" || msg.type === "ai-result") {
+            await this.manager.handleExternalMessage(msg as any);
+            this.emitFilesChanged();
+            return;
+        }
+
+        // Unified ingress (view channel + transfers) — single path through manager for dedupe + fingerprints.
+        if (msg.type === "content-share" || msg.type === "content-attach" || msg.type === "file-attach") {
+            await this.manager.handleExternalMessage(msg as any);
             this.emitFilesChanged();
             return;
         }
@@ -413,6 +436,7 @@ export class WorkCenterView extends UIElement implements View {
             this.pendingRenderAfterMount = true;
             return;
         }
+        this.pendingRenderAfterMount = false;
         const next = this.manager.renderWorkCenterView();
 
         // Preserve shell visibility markers on root replacement.
@@ -464,7 +488,9 @@ export class WorkCenterView extends UIElement implements View {
             this.pendingRenderAfterMount = false;
             this.requestRender();
         }
-        void this.flushPendingMessages();
+        requestAnimationFrame(() => {
+            void this.flushPendingMessages();
+        });
     }
 
     private onHide(): void {

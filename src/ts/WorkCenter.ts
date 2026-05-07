@@ -2,7 +2,7 @@
 import { marked, type MarkedExtension } from "marked";
 import markedKatex from "marked-katex-extension";
 import renderMathInElement from "katex/dist/contrib/auto-render.mjs";
-
+import { validateReadableFileForIngress } from "com/core/view-ingress-validation";
 
 const MATH_DELIMITER_PATTERN = /\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|(?<!\$)\$[^$\n]+\$|\\\([\s\S]*?\\\)/;
 const FENCED_CODE_PATTERN = /(^|\n)(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n\2(?=\n|$)/g;
@@ -177,16 +177,45 @@ export class WorkCenterManager {
     }
 
     // Handle incoming content from unified messaging system
+    private fingerprintIncomingFile(file: File): string {
+        return `${String(file.name || "").trim().toLowerCase()}::${Number(file.size || 0)}::${String(file.type || "").trim().toLowerCase()}`;
+    }
+
+    private pushUniqueIncomingFile(file: File | null): file is File {
+        if (!file) return false;
+        const key = this.fingerprintIncomingFile(file);
+        for (const existing of this.state.files) {
+            if (this.fingerprintIncomingFile(existing) === key) return false;
+        }
+        this.state.files.push(file);
+        return true;
+    }
+
     private async handleIncomingContent(data: any, contentType: string): Promise<void> {
         try {
+            let attached = false;
+
+            if (Array.isArray(data.files) && data.files.length > 0) {
+                const filesFromArray = data.files.filter((x: unknown): x is File => x instanceof File);
+                for (const f of filesFromArray) {
+                    const chk = validateReadableFileForIngress(f);
+                    // eslint-disable-next-line no-await-in-loop -- sequential attach keeps UX ordering predictable
+                    if (!chk.ok) {
+                        console.warn("[WorkCenter] Skipping oversized/invalid ingress file:", chk.reason, f.name);
+                        continue;
+                    }
+                    if (this.pushUniqueIncomingFile(f)) attached = true;
+                }
+            }
+
             let fileToAttach: File | null = null;
 
-            if (data.file instanceof File) {
+            if (!attached && data.file instanceof File) {
                 fileToAttach = data.file;
-            } else if (data.blob instanceof Blob) {
+            } else if (!attached && data.blob instanceof Blob) {
                 const filename = data.filename || `attachment-${Date.now()}.${contentType === 'markdown' ? 'md' : 'txt'}`;
                 fileToAttach = new File([data.blob], filename, { type: data.blob.type });
-            } else if (data.text || data.content) {
+            } else if (!attached && (data.text || data.content)) {
                 const content = data.text || data.content;
                 const textContent = typeof content === 'string' ? content : JSON.stringify(content, null, 2);
                 const filename = data.filename || `content-${Date.now()}.${contentType === 'markdown' ? 'md' : 'txt'}`;
@@ -195,11 +224,21 @@ export class WorkCenterManager {
             }
 
             if (fileToAttach) {
-                this.state.files.push(fileToAttach);
-                // Update UI to reflect new file
+                const chk = validateReadableFileForIngress(fileToAttach);
+                if (!chk.ok) {
+                    console.warn("[WorkCenter] Rejecting primary attachment:", chk.reason);
+                    fileToAttach = null;
+                }
+            }
+
+            if (fileToAttach && this.pushUniqueIncomingFile(fileToAttach)) attached = true;
+
+            if (attached) {
                 this.ui.updateFileList(this.state);
                 this.ui.updateFileCounter(this.state);
-                this.deps.showMessage(`Attached ${fileToAttach.name} to Work Center`);
+                this.deps.showMessage(
+                    fileToAttach ? `Attached ${fileToAttach.name} to Work Center` : "Attached files to Work Center"
+                );
             }
         } catch (error) {
             console.warn('[WorkCenter] Failed to handle incoming content:', error);
@@ -220,8 +259,8 @@ export class WorkCenterManager {
             }
             this.processedMessageIds.add(messageId);
             if (this.processedMessageIds.size > 256) {
-                const [first] = this.processedMessageIds;
-                if (first) this.processedMessageIds.delete(first);
+                const iter = this.processedMessageIds.values().next();
+                if (!iter.done) this.processedMessageIds.delete(iter.value);
             }
         }
 
@@ -246,9 +285,15 @@ export class WorkCenterManager {
             return;
         }
 
-        // Generic content attachment
-        if (message.type === 'content-share' && message.data) {
+        // Generic content attachment (+ view-routed file transfers)
+        const isAttachmentEnvelope =
+            message.type === 'content-share' ||
+            message.type === 'content-attach' ||
+            message.type === 'file-attach';
+
+        if (isAttachmentEnvelope && message.data) {
             await this.handleIncomingContent(message.data, message.contentType || 'text');
+            return;
         }
     }
 
