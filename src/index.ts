@@ -445,8 +445,8 @@ export class WorkCenterView extends UIElement implements View {
             next.setAttribute("data-view", activeViewMarker);
         }
         next.hidden = currentElement.hidden;
-        // INVARIANT: Minimal/immersive shells assign `slot="view"` on slotted roots; without it, Shadow DOM
-        // does not project the node into `<slot name="view">` and the whole view vanishes after any re-render.
+        // INVARIANT: Minimal/immersive shells use the default (unnamed) slot inside shadow `<main>`; roots must
+        // stay children of `cw-shell-*` in light DOM. If `slot` is missing, the node does not project and vanishes after re-render.
         if (currentElement.hasAttribute("slot")) {
             next.slot = currentElement.slot;
         }
