@@ -65,6 +65,7 @@
             background-position: right var(--space-sm) center;
             background-size: 1rem 1rem;
             color: var(--color-on-surface);
+            color: contrast-color(var(--color-surface-container));
             cursor: pointer;
             padding-block: var(--space-sm);
             padding-inline: var(--space-sm) 2rem;
@@ -76,6 +77,7 @@
             &:hover {
                 border-color: color-mix(in oklab, var(--color-primary) 35%, var(--color-outline-variant));
                 background-color: var(--color-surface-container-high);
+                color: contrast-color(var(--color-surface-container-high));
             }
 
             &:focus {
