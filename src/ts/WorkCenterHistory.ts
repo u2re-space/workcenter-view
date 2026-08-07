@@ -1,4 +1,4 @@
-import { H } from "fest/lure";
+import { H } from "@fest-lib/lure";
 import { actionHistory } from "com/service/misc/ActionHistory";
 import type { ActionEntry } from "com/service/misc/ActionHistory";
 import type { WorkCenterState, WorkCenterDependencies } from "./WorkCenterState";

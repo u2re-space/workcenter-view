@@ -4,15 +4,15 @@
  * Shell adapter for the module-based WorkCenter implementation.
  */
 
-import { loadAsAdopted, removeAdopted } from "fest/dom";
+import { loadAsAdopted, removeAdopted } from "@fest-lib/dom";
 import { type BaseViewOptions } from "views/types";
 import { WorkCenterManager } from "./ts/WorkCenter";
 import type { WorkCenterDependencies } from "./ts/WorkCenterState";
 
 // @ts-ignore - SCSS import
 import workcenterStyles from "./scss/_index.scss?inline";
-import { defineElement } from "fest/lure";
-import { UIElement } from "fest/fl-ui";
+import { defineElement } from "@fest-lib/lure";
+import { UIElement } from "@fest-lib/fl-ui";
 
 /**
  * WHY: `document.adoptedStyleSheets` entries are global; closing one floating window must not unmount styles for another.

@@ -5,7 +5,7 @@
  * and history submodules so the higher-level controller can coordinate one
  * unified AI workspace without hardcoding markup in every collaborator.
  */
-import { H } from "fest/lure";
+import { H } from "@fest-lib/lure";
 import type { WorkCenterState, WorkCenterDependencies } from "./WorkCenterState";
 import type { WorkCenterResults } from "./WorkCenterResults";
 import type { WorkCenterAttachments } from "./WorkCenterAttachments";

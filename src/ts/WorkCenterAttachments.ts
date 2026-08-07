@@ -1,4 +1,4 @@
-import { H } from "fest/lure";
+import { H } from "@fest-lib/lure";
 import type { WorkCenterState, WorkCenterDependencies } from "./WorkCenterState";
 import type { WorkCenterFileOps } from "./WorkCenterFileOps";
 import { ROUTE_HASHES } from 'com/config/Names';

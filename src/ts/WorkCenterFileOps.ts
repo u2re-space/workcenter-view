@@ -1,6 +1,6 @@
 import type { WorkCenterState, WorkCenterDependencies } from "./WorkCenterState";
 import { ROUTE_HASHES } from 'com/config/Names';
-import { normalizeDataAsset, parseDataUrl, isBase64Like } from 'fest/lure';
+import { normalizeDataAsset, parseDataUrl, isBase64Like } from '@fest-lib/lure';
 
 export class WorkCenterFileOps {
     private deps: WorkCenterDependencies;
