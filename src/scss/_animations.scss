@@ -62,6 +62,7 @@
                 display: flex;
                 align-items: center;
                 gap: var(--space-sm);
+                flex-wrap: nowrap;
             }
         }
 
@@ -217,10 +218,11 @@
                 border-block-start: 1px solid var(--color-outline-variant);
                 block-size: max-content;
                 max-block-size: stretch;
+                flex-wrap: nowrap;
 
                 .modal-actions-group {
                     display: flex;
-                    flex-wrap: wrap;
+                    flex-wrap: nowrap;
                     align-items: center;
                     gap: var(--space-sm);
                     max-block-size: stretch;
