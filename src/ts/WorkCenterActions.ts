@@ -8,6 +8,7 @@ import type { WorkCenterDataProcessing } from "./WorkCenterDataProcessing";
 import type { WorkCenterHistory } from "./WorkCenterHistory";
 import type { WorkCenterTemplates } from "./WorkCenterTemplates";
 import { extractJSONFromAIResponse } from "core/document/AIResponseParser";
+import { shouldHandoffViewToSibling, stashSkuHandoff } from "com/config/ecosystem-skus";
 
 export class WorkCenterActions {
     private deps: WorkCenterDependencies;
@@ -243,6 +244,13 @@ export class WorkCenterActions {
             } catch (error) {
             }
 
+            const filename = `workcenter-output-${Date.now()}.${state.outputFormat === 'markdown' ? 'md' : (state.outputFormat === 'json' ? 'json' : (state.outputFormat === 'html' ? 'html' : (state.outputFormat === 'code' ? 'ts' : 'txt')))}`;
+            if (shouldHandoffViewToSibling("viewer")) {
+                stashSkuHandoff({ dest: "viewer", content: String(resultContent || ""), filename });
+                await this.navigateToViewer();
+                return;
+            }
+
             await unifiedMessaging.sendMessage({
                 id: crypto.randomUUID(),
                 type: 'content-view',
@@ -251,7 +259,7 @@ export class WorkCenterActions {
                 contentType: state.outputFormat === 'markdown' ? 'markdown' : 'text',
                 data: {
                     text: resultContent,
-                    filename: `workcenter-output-${Date.now()}.${state.outputFormat === 'markdown' ? 'md' : (state.outputFormat === 'json' ? 'json' : (state.outputFormat === 'html' ? 'html' : (state.outputFormat === 'code' ? 'ts' : 'txt')))}`
+                    filename
                 },
                 metadata: {
                     title: 'Work Center Output',

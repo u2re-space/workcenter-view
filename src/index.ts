@@ -4,6 +4,7 @@
  * Shell adapter for the module-based WorkCenter implementation.
  */
 
+import { takeSkuHandoff } from "com/config/ecosystem-skus";
 import { loadAsAdopted, removeAdopted } from "@fest-lib/dom";
 import { type BaseViewOptions } from "views/types";
 import { WorkCenterManager } from "./ts/WorkCenter";
@@ -377,6 +378,19 @@ export class WorkCenterView extends UIElement implements View {
         const initialMessage = this.normalizeInitialDataMessage(this.options.initialData);
         if (initialMessage) {
             this.pendingMessages.unshift(initialMessage);
+        }
+        const handoff = takeSkuHandoff("workcenter", "process");
+        if (handoff && (handoff.content || handoff.filename)) {
+            this.pendingMessages.unshift({
+                type: "content-share",
+                contentType: "markdown",
+                data: {
+                    text: handoff.content,
+                    content: handoff.content,
+                    filename: handoff.filename,
+                    source: "sku-handoff"
+                }
+            });
         }
     }
 
