@@ -23,7 +23,8 @@
         grid-template-columns: minmax(0, 1fr);
         grid-template-rows: minmax(0px, max-content) minmax(0px, 1fr);
         gap: var(--space-md);
-        padding: var(--space-md);
+        padding-block: max(var(--space-md), env(safe-area-inset-top, 0px)) max(var(--space-md), env(safe-area-inset-bottom, 0px));
+        padding-inline: max(var(--space-md), env(safe-area-inset-left, 0px)) max(var(--space-md), env(safe-area-inset-right, 0px));
         overflow-y: auto;
         overflow-x: hidden;
         background: var(--color-background);
@@ -38,7 +39,8 @@
         scrollbar-width: thin;
         scrollbar-color: var(--color-outline-variant) transparent;
         animation: workcenter-fade-in-up 0.3s ease-out;
-        contain: strict;
+        /* WHY: `contain: strict` clipped the prompt footer on Capacitor / narrow viewports */
+        contain: layout;
 
         textarea,
         input,

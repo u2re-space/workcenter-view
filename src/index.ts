@@ -475,11 +475,30 @@ export class WorkCenterView extends UIElement implements View {
         this.shellContext?.showMessage(message);
     }
 
+    private onProcessOpen = (ev: Event): void => {
+        const detail = (ev as CustomEvent<{ content?: string; filename?: string }>).detail;
+        const content = String(detail?.content || "").trim();
+        if (!content) return;
+        this.pendingMessages.push({
+            type: "content-share",
+            contentType: "markdown",
+            data: {
+                text: content,
+                content,
+                filename: detail?.filename,
+                source: "process-share"
+            }
+        });
+        void this.flushPendingMessages();
+    };
+
     private onMount(): void {
         this.leaseWorkCenterDocumentStyles();
+        window.addEventListener("cwsp:process-open", this.onProcessOpen);
     }
 
     private onUnmount(): void {
+        window.removeEventListener("cwsp:process-open", this.onProcessOpen);
         this.resultObserver?.disconnect();
         this.resultObserver = null;
         this.manager?.destroy();

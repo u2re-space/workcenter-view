@@ -28,16 +28,21 @@
         @container (max-inline-size: 768px) {
             gap: var(--space-sm);
             padding: var(--space-sm);
-            grid-template-columns: [controls] minmax(0, 1fr);
+            grid-template-columns: [logo] minmax(0, max-content) [controls] minmax(0, 1fr);
 
             h2 {
-                display: none;
+                font-size: var(--text-sm);
             }
         }
 
         @container (max-inline-size: 480px) {
             gap: var(--space-xs);
             padding: var(--space-xs);
+            grid-template-columns: [controls] minmax(0, 1fr);
+
+            h2 {
+                display: none;
+            }
         }
     }
 
@@ -92,7 +97,7 @@
 
         @container (max-inline-size: 768px) {
             gap: var(--space-xs);
-            grid-template-columns: minmax(0, 1fr);
+            grid-template-columns: repeat(2, minmax(0, 1fr));
             max-block-size: none;
             overflow: visible;
             padding: var(--space-sm);
@@ -105,7 +110,7 @@
             z-index: auto;
         }
 
-        @container (max-inline-size: 480px) {
+        @container (max-inline-size: 360px) {
             gap: var(--space-xs);
             padding: var(--space-xs);
             grid-template-columns: minmax(0, 1fr);
@@ -136,7 +141,7 @@
 
         select {
             inline-size: 100%;
-            min-block-size: 2.25rem;
+            min-block-size: 2.75rem;
             text-overflow: ellipsis;
             overflow: hidden;
             white-space: nowrap;
