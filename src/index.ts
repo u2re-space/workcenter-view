@@ -5,7 +5,7 @@
  */
 
 import { takeSkuHandoff } from "com/config/ecosystem-skus";
-import { loadAsAdopted, removeAdopted } from "@fest-lib/dom";
+import { loadAsAdopted, removeAdopted } from "@fest-lib/style-lib";
 import { type BaseViewOptions } from "views/types";
 import { WorkCenterManager } from "./ts/WorkCenter";
 import type { WorkCenterDependencies } from "./ts/WorkCenterState";
