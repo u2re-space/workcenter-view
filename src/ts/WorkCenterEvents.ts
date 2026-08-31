@@ -14,10 +14,8 @@ import type { WorkCenterHistory } from "./WorkCenterHistory";
 import type { WorkCenterAttachmentIngress } from "./WorkCenterAttachmentIngress";
 import { collectAttachmentCandidates } from "../../../../projects/fl.ui/src/ui/inputs/attachments/AttachmentSources";
 
-const FILE_ACCEPT = [
-    "image/*", ".pdf", ".docx", ".xlsx", ".txt", ".md", ".markdown",
-    ".json", ".csv", ".html", ".css", ".js", ".ts"
-].join(",");
+/** Any file — size/type checks happen in attachment ingress, not the picker. */
+const FILE_ACCEPT = "*/*";
 
 const isHttpUrl = (value: string): boolean => {
     try {
@@ -67,8 +65,13 @@ export class WorkCenterEvents {
         input.hidden = true;
         input.dataset.workcenterFilePicker = "";
         input.addEventListener("change", async () => {
-            await this.ingress.addFiles(Array.from(input.files || []));
+            const files = Array.from(input.files || []);
             input.value = "";
+            if (!files.length) return;
+            const added = await this.ingress.addFiles(files);
+            if (!added.length) {
+                this.deps.showMessage?.("Could not attach that file");
+            }
         });
         this.container.append(input);
     }
@@ -201,6 +204,12 @@ export class WorkCenterEvents {
             void this.actions.persistDraft(this.state);
             this.deps.render?.();
         });
+
+        const instruction = this.container?.querySelector(".instruction-select") as HTMLSelectElement | null;
+        instruction?.addEventListener("change", () => {
+            void this.templates.applyInstruction(this.state, instruction.value);
+            WorkCenterStateManager.saveState(this.state);
+        });
     }
 
     private setupVoiceInput(): void {
@@ -240,6 +249,10 @@ export class WorkCenterEvents {
                     break;
                 case "open-request-options":
                     this.togglePanel("[data-workcenter-request-options]", actionElement);
+                    void this.templates.fillInstructionSelects(this.container, this.state);
+                    break;
+                case "refresh-instructions":
+                    void this.templates.fillInstructionSelects(this.container, this.state);
                     break;
                 case "open-secondary":
                     this.togglePanel("[data-workcenter-secondary]", actionElement);

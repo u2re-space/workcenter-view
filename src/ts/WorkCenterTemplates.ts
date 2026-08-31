@@ -113,6 +113,37 @@ export class WorkCenterTemplates {
         `;
     }
 
+    async fillInstructionSelects(root: ParentNode | null, state: WorkCenterState): Promise<void> {
+        if (!root) return;
+        const instructions = await this.loadInstructions();
+        const hasStored = Boolean(state.selectedInstruction) &&
+            instructions.some((item) => item.id === state.selectedInstruction);
+        const selectedId = hasStored ? state.selectedInstruction : this.cachedActiveInstructionId;
+        if ((!state.selectedInstruction || !hasStored) && selectedId) {
+            state.selectedInstruction = selectedId;
+        }
+        root.querySelectorAll<HTMLSelectElement>(".instruction-select").forEach((select) => {
+            select.replaceChildren();
+            const empty = document.createElement("option");
+            empty.value = "";
+            empty.textContent = "None (default)";
+            select.append(empty);
+            for (const item of instructions) {
+                const option = document.createElement("option");
+                option.value = item.id;
+                option.textContent = item.label || item.id;
+                option.selected = item.id === selectedId;
+                select.append(option);
+            }
+            select.value = selectedId || "";
+        });
+    }
+
+    async applyInstruction(state: WorkCenterState, instructionId: string): Promise<void> {
+        state.selectedInstruction = instructionId;
+        await this.setActiveInstruction(instructionId || null);
+    }
+
     // ────────────────────────────────────────
     // Prompt Templates (WorkCenter-local)
     // ────────────────────────────────────────
@@ -130,6 +161,7 @@ export class WorkCenterTemplates {
             H`<div class="template-item" data-index="${index}">
               <div class="template-item-header">
                 <input type="text" class="template-name" value="${template.name}" data-index="${index}" placeholder="Template name...">
+                <button class="btn small" data-action="use-template" data-index="${index}" title="Use this template">Use</button>
                 <button class="btn small btn-danger remove-template" data-index="${index}" title="Remove template">
                   <ui-icon icon="trash" size="14"></ui-icon>
                 </button>
@@ -163,7 +195,16 @@ export class WorkCenterTemplates {
             const action = target.closest("[data-action]")?.getAttribute("data-action");
             const index = target.closest("[data-index]")?.getAttribute("data-index");
 
-            if (action === 'add-template') {
+            if (action === "refresh-instructions") {
+                await this.fillInstructionSelects(modal, state);
+            } else if (action === "use-template" && index) {
+                const template = state.promptTemplates[Number(index)];
+                if (template) {
+                    this.selectTemplate(state, template.prompt);
+                    modal.remove();
+                    this.deps.render?.();
+                }
+            } else if (action === 'add-template') {
                 this.addTemplate(state);
                 modal.remove();
                 this.showTemplateEditor(state, container);
@@ -190,6 +231,11 @@ export class WorkCenterTemplates {
         });
 
         container.append(modal);
+        const instruction = modal.querySelector(".instruction-select") as HTMLSelectElement | null;
+        instruction?.addEventListener("change", () => {
+            void this.applyInstruction(state, instruction.value);
+        });
+        void this.fillInstructionSelects(modal, state);
     }
 
     private addTemplate(state: WorkCenterState): void {

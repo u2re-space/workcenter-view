@@ -98,6 +98,7 @@ import {
     createWorkCenterSessionPersistence
 } from "./WorkCenterSessionPersistence";
 import { WorkCenterDocumentPreparer } from "./WorkCenterDocumentPreparation";
+import { takeHeldIngressFiles } from "com/routing/channel/sku-ingress";
 
 export class WorkCenterManager {
     private state: WorkCenterState;
@@ -135,7 +136,14 @@ export class WorkCenterManager {
                     this.deps.showMessage("Unable to save the attachment draft");
                 });
                 this.deps.onFilesChanged?.();
-                this.deps.render?.();
+                const host = this.ui?.getContainer();
+                // WHY: full remount often targets a detached GLit/shell node — chips never appear.
+                if (host?.isConnected) {
+                    this.ui.updateFileCounter(this.state);
+                    this.ui.updatePromptInput(this.state);
+                } else {
+                    this.deps.render?.();
+                }
             },
             onRejected: (reason) => this.deps.showMessage(reason)
         });
@@ -243,8 +251,14 @@ export class WorkCenterManager {
 
     private syncStateFromSession(render = true): void {
         const snapshot = this.session.snapshot();
+        const liveAttachments = this.state.draft?.attachments || [];
         this.state.messages = snapshot.messages;
         this.state.draft = snapshot.draft;
+        for (const ref of liveAttachments) {
+            if (!this.state.draft.attachments.some((item) => item.hash === ref.hash)) {
+                this.state.draft.attachments.push(ref);
+            }
+        }
         this.state.currentPrompt = snapshot.draft.content;
         this.state.sessionEpoch = snapshot.epoch;
         this.state.sessionHydrated = true;
@@ -318,15 +332,26 @@ export class WorkCenterManager {
                     }
                 }
             }
+            if (!files.length) files.push(...takeHeldIngressFiles());
+
+            const rawText = data?.text ?? data?.content;
+            const text = rawText === undefined || rawText === null
+                ? ""
+                : typeof rawText === "string"
+                    ? rawText
+                    : JSON.stringify(rawText, null, 2);
+            if (!files.length && (String(data?.filename || "").trim() || text.trim())) {
+                files.push(new File(
+                    [text],
+                    String(data?.filename || data?.title || `shared-${Date.now()}.txt`),
+                    { type: contentType === "markdown" ? "text/markdown" : "text/plain" }
+                ));
+            }
 
             const attached = await this.attachmentIngress.addFiles(files);
             if (typeof data?.url === "string") await this.attachmentIngress.addUrl(data.url);
 
-            const rawText = data?.text ?? data?.content;
-            if (rawText !== undefined && rawText !== null) {
-                const text = typeof rawText === "string"
-                    ? rawText
-                    : JSON.stringify(rawText, null, 2);
+            if (text.trim() && attached.length === 0) {
                 await this.appendDraftText(text);
             }
             if (attached.length) {
@@ -368,12 +393,22 @@ export class WorkCenterManager {
         }
 
         if (message.type === 'share-target-result' && message.data) {
+            const note = String(message.data.content ?? message.data.rawData ?? "").trim();
+            if (note) {
+                await this.session.appendAssistantNote(note);
+                this.syncStateFromSession(false);
+            }
             await this.shareTarget.addShareTargetResult(this.state, message.data);
             this.ui.updateDataPipeline(this.state);
             return;
         }
 
         if (message.type === 'ai-result' && message.data) {
+            const note = String(message.data.data ?? message.data.content ?? message.data.text ?? "").trim();
+            if (note && message.data.success !== false) {
+                await this.session.appendAssistantNote(note);
+                this.syncStateFromSession(false);
+            }
             await this.shareTarget.handleAIResult(this.state, message.data);
             this.ui.updateDataPipeline(this.state);
             return;
@@ -421,6 +456,7 @@ export class WorkCenterManager {
         this.ui.updateFileList(this.state);
         this.ui.updateFileCounter(this.state);
         this.history.updateRecentHistory(this.state);
+        void this.templates.fillInstructionSelects(container, this.state);
 
         return container;
     }

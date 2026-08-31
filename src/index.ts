@@ -428,10 +428,19 @@ export class WorkCenterView extends UIElement implements View {
     }
 
     private requestRender(): void {
-        if (!this.manager || !this.element) return;
-        const currentElement = this.element;
-        const parent = currentElement.parentElement;
-        if (!parent) {
+        if (!this.manager) return;
+        let currentElement = this.element;
+        if (!currentElement?.parentElement) {
+            const connected = typeof document !== "undefined"
+                ? document.querySelector<HTMLElement>(".workcenter-chat[data-view='workcenter']")
+                : null;
+            if (connected?.parentElement) {
+                currentElement = connected;
+                this.element = connected;
+            }
+        }
+        const parent = currentElement?.parentElement;
+        if (!currentElement || !parent) {
             // During cold-start share/launch bootstrap, messages can arrive before the
             // rendered node is actually attached by the shell. Re-rendering now would
             // rebind manager containers to a detached tree and make visible UI inert.

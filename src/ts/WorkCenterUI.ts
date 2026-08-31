@@ -182,6 +182,18 @@ const createRequestOptions = (state: WorkCenterState): HTMLElement => {
     panel.hidden = true;
     panel.setAttribute("aria-label", "Response options");
 
+    const instructionLabel = document.createElement("label");
+    instructionLabel.textContent = "Instruction";
+    const instructionSelect = document.createElement("select");
+    instructionSelect.className = "instruction-select";
+    instructionSelect.setAttribute("data-action", "select-instruction");
+    const emptyInstruction = document.createElement("option");
+    emptyInstruction.value = "";
+    emptyInstruction.textContent = "None (default)";
+    instructionSelect.append(emptyInstruction);
+    instructionLabel.append(instructionSelect);
+    panel.append(instructionLabel);
+
     const templateLabel = document.createElement("label");
     templateLabel.textContent = "Template";
     const templateSelect = document.createElement("select");

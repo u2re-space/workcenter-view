@@ -217,6 +217,21 @@ export class WorkCenterSession {
         });
     }
 
+    /** Visible note for share-target / AI results (legacy pipeline is not in the chat shell). */
+    async appendAssistantNote(content: string): Promise<WorkCenterMessage> {
+        const message: WorkCenterMessage = {
+            id: createId("assistant"),
+            role: "assistant",
+            createdAt: Date.now(),
+            content: String(content || "").trim(),
+            attachments: [],
+            status: "complete"
+        };
+        this.state.messages.push(message);
+        await this.persist();
+        return cloneMessage(message);
+    }
+
     async newChat(): Promise<void> {
         this.state = {
             ...emptySnapshot(),
