@@ -1,39 +1,339 @@
 /**
- * DOM composition layer for the Work Center view.
+ * Conversation-first DOM composition for Work Center.
  *
- * This class assembles the visual shell around attachments, prompts, results,
- * and history submodules so the higher-level controller can coordinate one
- * unified AI workspace without hardcoding markup in every collaborator.
+ * FIND:workcenter-chat-ui
+ * WHY: The primary reading order is the transcript, not a stack of output and
+ * input cards; secondary pipeline controls stay available without dominating it.
  */
-import { H } from "@fest-lib/lure";
-import type { WorkCenterState, WorkCenterDependencies } from "./WorkCenterState";
-import type { WorkCenterResults } from "./WorkCenterResults";
+import type { WorkCenterDependencies, WorkCenterState } from "./WorkCenterState";
 import type { WorkCenterAttachments } from "./WorkCenterAttachments";
 import type { WorkCenterPrompts } from "./WorkCenterPrompts";
+import type { WorkCenterResults } from "./WorkCenterResults";
 import type { WorkCenterHistory } from "./WorkCenterHistory";
+import type { WorkCenterAttachmentRef, WorkCenterDraft, WorkCenterMessage } from "./WorkCenterSession";
+import { renderSafeMarkdown } from "../../../../projects/fl.ui/src/ui/markdown/render";
 
-/** View-composition facade for the Work Center feature. */
+export type WorkCenterAttachmentPresentation = {
+    fileFor(ref: WorkCenterAttachmentRef): File | null;
+    getPreviewUrl(file: File): string | null;
+};
+
+export type WorkCenterChatShellOptions = {
+    title: string;
+    draft: WorkCenterDraft;
+    messages: WorkCenterMessage[];
+    attachments?: WorkCenterAttachmentPresentation;
+    settings?: WorkCenterState;
+};
+
+const icon = (name: string, size = "18"): HTMLElement => {
+    const element = document.createElement("ui-icon");
+    element.setAttribute("icon", name);
+    element.setAttribute("icon-style", "duotone");
+    element.setAttribute("size", size);
+    element.setAttribute("aria-hidden", "true");
+    return element;
+};
+
+const button = (
+    action: string,
+    label: string,
+    iconName: string,
+    className = "wc-icon-button"
+): HTMLButtonElement => {
+    const element = document.createElement("button");
+    element.type = "button";
+    element.className = className;
+    element.dataset.action = action;
+    element.setAttribute("aria-label", label);
+    element.title = label;
+    element.append(icon(iconName));
+    return element;
+};
+
+const formatFileSize = (bytes: number): string => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+};
+
+const appendAttachmentCard = (
+    target: HTMLElement,
+    attachment: WorkCenterAttachmentRef,
+    presentation?: WorkCenterAttachmentPresentation,
+    removable = false
+): void => {
+    const card = document.createElement("div");
+    card.className = "wc-attachment-chip";
+    card.dataset.attachmentHash = attachment.hash;
+
+    const file = presentation?.fileFor(attachment) ?? null;
+    const preview = file ? presentation?.getPreviewUrl(file) : null;
+    if (preview) {
+        const image = document.createElement("img");
+        image.className = "wc-attachment-chip__preview";
+        image.src = preview;
+        image.alt = "";
+        image.decoding = "async";
+        image.loading = "lazy";
+        card.append(image);
+    } else {
+        card.append(icon(attachment.url ? "link" : "paperclip", "16"));
+    }
+
+    const label = document.createElement(attachment.url ? "a" : "span");
+    label.className = "wc-attachment-chip__label";
+    label.textContent = attachment.url || attachment.name;
+    if (attachment.url) {
+        const link = label as HTMLAnchorElement;
+        link.href = attachment.url;
+        link.target = "_blank";
+        link.rel = "noreferrer";
+    }
+    card.append(label);
+
+    const meta = document.createElement("span");
+    meta.className = "wc-attachment-chip__meta";
+    meta.textContent = attachment.error || formatFileSize(attachment.size);
+    card.append(meta);
+
+    if (removable) {
+        const remove = button("remove-draft-attachment", `Remove ${attachment.name}`, "x", "wc-chip-remove");
+        remove.dataset.attachmentHash = attachment.hash;
+        card.append(remove);
+    }
+    target.append(card);
+};
+
+const appendMessage = (
+    transcript: HTMLElement,
+    message: WorkCenterMessage,
+    presentation?: WorkCenterAttachmentPresentation
+): void => {
+    const item = document.createElement("article");
+    item.className = `workcenter-message workcenter-message--${message.role} is-${message.status}`;
+    item.dataset.workcenterMessage = "";
+    item.dataset.messageId = message.id;
+
+    const header = document.createElement("div");
+    header.className = "workcenter-message__header";
+    const author = document.createElement("span");
+    author.className = "workcenter-message__author";
+    author.textContent = message.role === "user" ? "You" : "Work Center";
+    header.append(author);
+    item.append(header);
+
+    const body = document.createElement("div");
+    body.className = "workcenter-message__body";
+    if (message.role === "assistant" && message.status === "complete") {
+        body.innerHTML = renderSafeMarkdown(message.content);
+    } else if (message.status === "pending") {
+        body.textContent = "Thinking…";
+        body.setAttribute("aria-busy", "true");
+    } else if (message.status === "failed") {
+        body.textContent = message.error || "The response could not be completed.";
+    } else if (message.status === "cancelled") {
+        body.textContent = "Cancelled";
+    } else {
+        body.textContent = message.content;
+    }
+    item.append(body);
+
+    if (message.attachments.length) {
+        const attachments = document.createElement("div");
+        attachments.className = "workcenter-message__attachments";
+        for (const attachment of message.attachments) {
+            appendAttachmentCard(attachments, attachment, presentation);
+        }
+        item.append(attachments);
+    }
+
+    if (message.role === "assistant" && message.status === "pending") {
+        const actions = document.createElement("div");
+        actions.className = "workcenter-message__actions";
+        const cancel = button("cancel-turn", "Cancel response", "stop-circle", "wc-quiet-button");
+        cancel.dataset.turnId = message.id;
+        actions.append(cancel);
+        item.append(actions);
+    }
+    if (message.role === "assistant" && message.status === "failed") {
+        const actions = document.createElement("div");
+        actions.className = "workcenter-message__actions";
+        const retry = button("retry-turn", "Retry response", "arrow-clockwise", "wc-quiet-button");
+        retry.dataset.turnId = message.id;
+        actions.append(retry);
+        item.append(actions);
+    }
+    if (message.role === "assistant" && message.status === "complete") {
+        const actions = document.createElement("div");
+        actions.className = "workcenter-message__actions";
+        const copy = button("copy-turn", "Copy response", "copy", "wc-quiet-button");
+        copy.dataset.turnId = message.id;
+        actions.append(copy);
+        item.append(actions);
+    }
+    transcript.append(item);
+};
+
+const createRequestOptions = (state: WorkCenterState): HTMLElement => {
+    const panel = document.createElement("section");
+    panel.className = "workcenter-request-options";
+    panel.dataset.workcenterRequestOptions = "";
+    panel.hidden = true;
+    panel.setAttribute("aria-label", "Response options");
+
+    const templateLabel = document.createElement("label");
+    templateLabel.textContent = "Template";
+    const templateSelect = document.createElement("select");
+    templateSelect.className = "template-select";
+    const emptyTemplate = document.createElement("option");
+    emptyTemplate.value = "";
+    emptyTemplate.textContent = "No template";
+    templateSelect.append(emptyTemplate);
+    for (const template of state.promptTemplates) {
+        const option = document.createElement("option");
+        option.value = template.prompt;
+        option.textContent = template.name;
+        option.selected = template.prompt === state.selectedTemplate;
+        templateSelect.append(option);
+    }
+    templateLabel.append(templateSelect);
+    panel.append(templateLabel);
+    panel.append(button("edit-templates", "Edit templates", "gear", "wc-quiet-button"));
+
+    const fields: Array<[string, string, string, Array<[string, string]>]> = [
+        ["Output", "format-select", state.outputFormat, [
+            ["auto", "Auto"], ["markdown", "Markdown"], ["json", "JSON"],
+            ["code", "Code"], ["raw", "Raw text"], ["text", "Plain text"], ["html", "HTML"]
+        ]],
+        ["Language", "language-select", state.selectedLanguage, [
+            ["auto", "Auto"], ["en", "English"], ["ru", "Русский"]
+        ]],
+        ["Recognition", "recognition-select", state.recognitionFormat, [
+            ["auto", "Auto"], ["most-suitable", "Most suitable"],
+            ["most-optimized", "Most optimized"], ["most-legibility", "Most legible"],
+            ["markdown", "Markdown"], ["html", "HTML"], ["text", "Plain text"], ["json", "JSON"]
+        ]],
+        ["Processing", "processing-select", state.processingFormat, [
+            ["markdown", "Markdown"], ["html", "HTML"], ["json", "JSON"], ["text", "Plain text"],
+            ["typescript", "TypeScript"], ["javascript", "JavaScript"], ["python", "Python"],
+            ["java", "Java"], ["cpp", "C++"], ["csharp", "C#"], ["php", "PHP"],
+            ["ruby", "Ruby"], ["go", "Go"], ["rust", "Rust"], ["xml", "XML"],
+            ["yaml", "YAML"], ["css", "CSS"], ["scss", "SCSS"]
+        ]]
+    ];
+
+    for (const [labelText, className, value, options] of fields) {
+        const label = document.createElement("label");
+        label.textContent = labelText;
+        const select = document.createElement("select");
+        select.className = className;
+        for (const [optionValue, optionText] of options) {
+            const option = document.createElement("option");
+            option.value = optionValue;
+            option.textContent = optionText;
+            option.selected = optionValue === value;
+            select.append(option);
+        }
+        label.append(select);
+        panel.append(label);
+    }
+    return panel;
+};
+
+/** Build a stateless, accessible Work Center chat shell for rendering or tests. */
+export const createWorkCenterChatShell = (options: WorkCenterChatShellOptions): HTMLElement => {
+    const root = document.createElement("div");
+    root.className = "workcenter-view workcenter-chat";
+    root.dataset.view = "workcenter";
+    root.setAttribute("role", "main");
+    root.setAttribute("aria-labelledby", "workcenter-title");
+
+    const header = document.createElement("header");
+    header.className = "workcenter-header";
+    const title = document.createElement("h2");
+    title.id = "workcenter-title";
+    title.textContent = options.title;
+    header.append(title);
+    const headerActions = document.createElement("div");
+    headerActions.className = "workcenter-header__actions";
+    headerActions.append(
+        button("new-chat", "New chat", "plus"),
+        button("open-secondary", "Open activity", "clock-counter-clockwise"),
+        button("open-request-options", "Response options", "sliders-horizontal")
+    );
+    header.append(headerActions);
+    root.append(header);
+    if (options.settings) root.append(createRequestOptions(options.settings));
+
+    const transcript = document.createElement("section");
+    transcript.className = "workcenter-transcript";
+    transcript.dataset.workcenterTranscript = "";
+    transcript.setAttribute("role", "log");
+    transcript.setAttribute("aria-live", "polite");
+    transcript.setAttribute("aria-relevant", "additions text");
+    if (!options.messages.length) {
+        const empty = document.createElement("p");
+        empty.className = "workcenter-transcript__empty";
+        empty.textContent = "Start with a question or attach something to review.";
+        transcript.append(empty);
+    } else {
+        for (const message of options.messages) appendMessage(transcript, message, options.attachments);
+    }
+    root.append(transcript);
+
+    const composer = document.createElement("form");
+    composer.className = "workcenter-composer";
+    composer.dataset.workcenterComposer = "";
+    composer.setAttribute("aria-label", "Message composer");
+    const chips = document.createElement("div");
+    chips.className = "workcenter-composer__attachments";
+    chips.dataset.draftAttachments = "";
+    for (const attachment of options.draft.attachments) {
+        appendAttachmentCard(chips, attachment, options.attachments, true);
+    }
+    composer.append(chips);
+
+    const inputRow = document.createElement("div");
+    inputRow.className = "workcenter-composer__input-row";
+    const prompt = document.createElement("textarea");
+    prompt.className = "prompt-input";
+    prompt.name = "prompt";
+    prompt.rows = 1;
+    prompt.placeholder = "Message Work Center…";
+    prompt.value = options.draft.content;
+    prompt.setAttribute("aria-label", "Message Work Center");
+    inputRow.append(prompt);
+    inputRow.append(button("select-files", "Attach files", "paperclip"));
+    inputRow.append(button("voice-input", "Voice input", "microphone"));
+    const send = button("execute", "Send message", "arrow-up", "wc-send-button");
+    send.type = "submit";
+    inputRow.append(send);
+    composer.append(inputRow);
+    root.append(composer);
+
+    const secondary = document.createElement("aside");
+    secondary.className = "workcenter-secondary-panel";
+    secondary.dataset.workcenterSecondary = "";
+    secondary.hidden = true;
+    secondary.setAttribute("aria-label", "Work Center activity");
+    secondary.append(button("view-action-history", "View technical activity", "clock-counter-clockwise", "wc-quiet-button"));
+    root.append(secondary);
+    return root;
+};
+
+/** Presentation facade that keeps legacy callers working while the view uses chat state. */
 export class WorkCenterUI {
     private container: HTMLElement | null = null;
-    private deps: WorkCenterDependencies;
-    private attachments: WorkCenterAttachments;
-    private prompts: WorkCenterPrompts;
-    private results: WorkCenterResults;
-    private history: WorkCenterHistory;
 
     constructor(
-        dependencies: WorkCenterDependencies,
-        attachments: WorkCenterAttachments,
-        prompts: WorkCenterPrompts,
-        results: WorkCenterResults,
-        history: WorkCenterHistory
-    ) {
-        this.deps = dependencies;
-        this.attachments = attachments;
-        this.prompts = prompts;
-        this.results = results;
-        this.history = history;
-    }
+        private readonly deps: WorkCenterDependencies,
+        private readonly attachments: WorkCenterAttachments,
+        private readonly prompts: WorkCenterPrompts,
+        private readonly results: WorkCenterResults,
+        private readonly history: WorkCenterHistory,
+        private readonly presentation?: WorkCenterAttachmentPresentation
+    ) {}
 
     setContainer(container: HTMLElement | null): void {
         this.container = container;
@@ -47,289 +347,46 @@ export class WorkCenterUI {
         return this.container;
     }
 
-    /** Render the top-level Work Center layout and wire child modules to the new container. */
     renderWorkCenterView(state: WorkCenterState): HTMLElement {
-        /* data-view: enables `view.workcenter` token layer `:has([data-view="workcenter"])` when mounted as light DOM (window-frame). */
-        const container = H`<div class="workcenter-view" data-view="workcenter">
-      <div class="workcenter-header">
-        <h2>AI Work Center</h2>
-        <div class="header-controls" aria-label="AI work center output and processing options">
-          <div class="control-selectors">
-          <div class="format-selector">
-            <label title="Output format for AI responses">Output</label>
-            <select class="format-select">
-              <option value="auto" ${state.outputFormat === 'auto' ? 'selected' : ''}>Auto</option>
-              <option value="markdown" ${state.outputFormat === 'markdown' ? 'selected' : ''}>Markdown</option>
-              <option value="json" ${state.outputFormat === 'json' ? 'selected' : ''}>JSON</option>
-              <option value="code" ${state.outputFormat === 'code' ? 'selected' : ''}>Code</option>
-              <option value="raw" ${state.outputFormat === 'raw' ? 'selected' : ''}>Raw Text</option>
-              <option value="text" ${state.outputFormat === 'text' ? 'selected' : ''}>Plain Text</option>
-              <option value="html" ${state.outputFormat === 'html' ? 'selected' : ''}>HTML</option>
-            </select>
-          </div>
-          <div class="language-selector">
-            <label title="Response language">Language</label>
-            <select class="language-select">
-              <option value="auto" ${state.selectedLanguage === 'auto' ? 'selected' : ''}>Auto</option>
-              <option value="en" ${state.selectedLanguage === 'en' ? 'selected' : ''}>English</option>
-              <option value="ru" ${state.selectedLanguage === 'ru' ? 'selected' : ''}>Русский</option>
-            </select>
-          </div>
-          <div class="recognition-selector">
-            <label title="How to recognize incoming content">Recognize</label>
-            <select class="recognition-select">
-              <option value="auto" ${state.recognitionFormat === 'auto' ? 'selected' : ''}>Auto</option>
-              <option value="most-suitable" ${state.recognitionFormat === 'most-suitable' ? 'selected' : ''}>Most Suitable</option>
-              <option value="most-optimized" ${state.recognitionFormat === 'most-optimized' ? 'selected' : ''}>Most Optimized</option>
-              <option value="most-legibility" ${state.recognitionFormat === 'most-legibility' ? 'selected' : ''}>Most Legible</option>
-              <option value="markdown" ${state.recognitionFormat === 'markdown' ? 'selected' : ''}>Markdown</option>
-              <option value="html" ${state.recognitionFormat === 'html' ? 'selected' : ''}>HTML</option>
-              <option value="text" ${state.recognitionFormat === 'text' ? 'selected' : ''}>Plain Text</option>
-              <option value="json" ${state.recognitionFormat === 'json' ? 'selected' : ''}>JSON</option>
-            </select>
-          </div>
-          <div class="processing-selector">
-            <label title="Treat content as this format when processing">Process</label>
-            <select class="processing-select">
-              <option value="markdown" ${state.processingFormat === 'markdown' ? 'selected' : ''}>Markdown</option>
-              <option value="html" ${state.processingFormat === 'html' ? 'selected' : ''}>HTML</option>
-              <option value="json" ${state.processingFormat === 'json' ? 'selected' : ''}>JSON</option>
-              <option value="text" ${state.processingFormat === 'text' ? 'selected' : ''}>Plain Text</option>
-              <option value="typescript" ${state.processingFormat === 'typescript' ? 'selected' : ''}>TypeScript</option>
-              <option value="javascript" ${state.processingFormat === 'javascript' ? 'selected' : ''}>JavaScript</option>
-              <option value="python" ${state.processingFormat === 'python' ? 'selected' : ''}>Python</option>
-              <option value="java" ${state.processingFormat === 'java' ? 'selected' : ''}>Java</option>
-              <option value="cpp" ${state.processingFormat === 'cpp' ? 'selected' : ''}>C++</option>
-              <option value="csharp" ${state.processingFormat === 'csharp' ? 'selected' : ''}>C#</option>
-              <option value="php" ${state.processingFormat === 'php' ? 'selected' : ''}>PHP</option>
-              <option value="ruby" ${state.processingFormat === 'ruby' ? 'selected' : ''}>Ruby</option>
-              <option value="go" ${state.processingFormat === 'go' ? 'selected' : ''}>Go</option>
-              <option value="rust" ${state.processingFormat === 'rust' ? 'selected' : ''}>Rust</option>
-              <option value="xml" ${state.processingFormat === 'xml' ? 'selected' : ''}>XML</option>
-              <option value="yaml" ${state.processingFormat === 'yaml' ? 'selected' : ''}>YAML</option>
-              <option value="css" ${state.processingFormat === 'css' ? 'selected' : ''}>CSS</option>
-              <option value="scss" ${state.processingFormat === 'scss' ? 'selected' : ''}>SCSS</option>
-            </select>
-          </div>
-          </div>
-        </div>
-      </div>
-
-      <div class="workcenter-content">
-        <div class="workcenter-layout">
-
-          <!-- Results & Processing Section -->
-          <div class="workcenter-block results-block">
-            <div class="results-section">
-              ${this.renderResultsTabs(state)}
-            </div>
-          </div>
-
-          <!-- Input Prompts Section -->
-          <div class="workcenter-block prompts-block">
-            ${this.renderInputTabs(state)}
-          </div>
-        </div>
-      </div>
-    </div>` as HTMLElement;
-
-        this.container = container;
-        this.attachments.setContainer(container);
-        this.prompts.setContainer(container);
-        this.results.setContainer(container);
-        this.history.setContainer(container);
-
-        // Initialize UI components
-        this.initializeUI(state);
-
+        const container = createWorkCenterChatShell({
+            title: "AI Work Center",
+            draft: state.draft,
+            messages: state.messages,
+            attachments: this.presentation,
+            settings: state
+        });
+        this.setContainer(container);
         return container;
     }
 
-    /** Synchronize child widgets after the root container has been created or replaced. */
-    private initializeUI(state: WorkCenterState): void {
-        // Setup drop zone functionality for attachments
-        this.attachments.setupDropZone(state);
-
-        // Initialize file list and counters
-        this.attachments.updateFileList(state);
-        this.attachments.updateFileCounter(state);
-        this.prompts.updatePromptFileCount(state);
-        this.updateInputTabFileCount(state);
-        this.updateResultsPipelineTabState(state);
-        this.history.updateRecentHistory(state);
-    }
-
     updateFileCounter(state: WorkCenterState): void {
-        this.attachments.updateFileCounter(state);
-        this.prompts.updatePromptFileCount(state);
-        this.updateInputTabFileCount(state);
+        const attachments = this.container?.querySelector("[data-draft-attachments]") as HTMLElement | null;
+        if (!attachments) return;
+        attachments.replaceChildren();
+        for (const attachment of state.draft.attachments) {
+            appendAttachmentCard(attachments, attachment, this.presentation, true);
+        }
     }
 
     updateFileList(state: WorkCenterState): void {
-        this.attachments.updateFileList(state);
-        this.prompts.updatePromptFileCount(state);
-        this.updateInputTabFileCount(state);
+        this.updateFileCounter(state);
     }
 
     updatePromptInput(state: WorkCenterState): void {
-        this.prompts.updatePromptInput(state);
+        const input = this.container?.querySelector(".prompt-input") as HTMLTextAreaElement | null;
+        if (input) input.value = state.draft.content;
     }
 
-    updateTemplateSelect(state: WorkCenterState): void {
-        this.prompts.updateTemplateSelect(state);
-    }
+    updateTemplateSelect(_state: WorkCenterState): void {}
+    updateVoiceButton(_state: WorkCenterState): void {}
+    updateDataPipeline(_state: WorkCenterState): void {}
+    updateDataCounters(_state: WorkCenterState): void {}
+    showProcessingMessage(_message: string): void {}
+    showResult(_state: WorkCenterState): void {}
+    showError(_error: string): void {}
+    clearResults(): void {}
 
-    updateVoiceButton(state: WorkCenterState): void {
-        this.prompts.updateVoiceButton(state);
-    }
-
-
-    updateDataPipeline(state: WorkCenterState): void {
-        this.results.updateDataPipeline(state);
-        this.updateResultsPipelineTabState(state);
-    }
-
-    updateDataCounters(state: WorkCenterState): void {
-        this.attachments.updateDataCounters(state);
-    }
-
-    showProcessingMessage(message: string): void {
-        this.results.showProcessingMessage(message);
-    }
-
-    showResult(state: WorkCenterState): void {
-        this.results.showResult(state);
-    }
-
-    showError(error: string): void {
-        this.results.showError(error);
-    }
-
-    clearResults(): void {
-        this.results.clearResults();
-    }
-
-    revokeAllPreviewUrls(state: WorkCenterState): void {
-        this.attachments.revokeAllPreviewUrls(state);
-    }
-
-    private renderInputTabs(state: WorkCenterState): string {
-        const activeTab = state.activeInputTab || "prompt";
-        return `
-            <div class="input-tabs-section" data-input-tabs data-active-tab="${activeTab}">
-                <div class="wc-block-header">
-                    <div class="input-tab-actions">
-                        <button class="tab-btn ${activeTab === 'prompt' ? 'is-active' : ''}" data-action="switch-input-tab" data-tab="prompt" aria-selected="${activeTab === 'prompt'}">Prompt</button>
-                        <button class="tab-btn ${activeTab === 'attachments' ? 'is-active' : ''}" data-action="switch-input-tab" data-tab="attachments" aria-selected="${activeTab === 'attachments'}">Files (${state.files.length})</button>
-                    </div>
-                    <h3>Work Inputs</h3>
-                    <div class="file-actions">
-                        <button class="btn btn-icon" data-action="select-files" title="Choose Files">
-                            <ui-icon icon="folder-open" size="18" icon-style="duotone"></ui-icon>
-                            <span class="btn-text">Add Files</span>
-                        </button>
-                        <button class="btn btn-icon" data-action="clear-all-files" title="Clear All Files">
-                            <ui-icon icon="trash" size="18" icon-style="duotone"></ui-icon>
-                            <span class="btn-text">Clear All</span>
-                        </button>
-                    </div>
-                </div>
-                <div class="input-tab-panels">
-                    <section class="tab-panel ${activeTab === 'prompt' ? 'is-active' : ''}" data-tab-panel="prompt">
-                        ${this.prompts.renderPromptPanel(state)}
-                    </section>
-                    <section class="tab-panel ${activeTab === 'attachments' ? 'is-active' : ''}" data-tab-panel="attachments">
-                        ${this.attachments.renderAttachmentsSection(state)}
-                    </section>
-                </div>
-            </div>
-        `;
-    }
-
-    private renderResultsTabs(state: WorkCenterState): string {
-        const hasPipelineData = Boolean(state.recognizedData || (state.processedData && state.processedData.length > 0));
-        const pipelineCount = (state.recognizedData ? 1 : 0) + (state.processedData?.length || 0);
-        const activeTab = state.activeResultsTab === "pipeline" && !hasPipelineData
-            ? "output"
-            : state.activeResultsTab;
-
-        return `
-            <div class="results-tabs-section" data-results-tabs data-active-tab="${activeTab}">
-                <div class="wc-block-header results-tabs-header">
-                    <div class="results-tab-actions">
-                        <button class="tab-btn ${activeTab === 'output' ? 'is-active' : ''}" data-action="switch-results-tab" data-tab="output" aria-selected="${activeTab === 'output'}">Output</button>
-                        <button class="tab-btn ${activeTab === 'pipeline' ? 'is-active' : ''}" data-action="switch-results-tab" data-tab="pipeline" aria-selected="${activeTab === 'pipeline'}"${hasPipelineData ? '' : ' disabled'}>Pipeline (${pipelineCount})</button>
-                        <button class="tab-btn ${activeTab === 'history' ? 'is-active' : ''}" data-action="switch-results-tab" data-tab="history" aria-selected="${activeTab === 'history'}">History</button>
-                    </div>
-                    <h3>Results & Processing</h3>
-                    ${this.results.renderOutputHeader()}
-                </div>
-                <div class="results-tab-panels">
-                    <section class="results-tab-panel ${activeTab === 'output' ? 'is-active' : ''}" data-results-tab-panel="output">
-                        <div class="wc-output-section">
-                            ${this.results.renderOutputContent()}
-                        </div>
-                    </section>
-                    <section class="results-tab-panel ${activeTab === 'pipeline' ? 'is-active' : ''}" data-results-tab-panel="pipeline">
-                        ${hasPipelineData ? this.results.renderDataPipeline(state) : '<div class="wc-results-empty">No data pipeline yet</div>'}
-                    </section>
-                    <section class="results-tab-panel ${activeTab === 'history' ? 'is-active' : ''}" data-results-tab-panel="history">
-                        <div class="history-section">
-                            <div class="history-header">
-                                <h4>Recent Activity</h4>
-                                <div class="result-actions">
-                                    <button class="btn btn-icon" data-action="view-action-history" title="View Action History">
-                                        <ui-icon icon="history" size="18" icon-style="duotone"></ui-icon>
-                                        <span class="btn-text">History</span>
-                                    </button>
-                                    <button class="btn" data-action="view-full-history">View All History</button>
-                                </div>
-                            </div>
-                            <div class="recent-history" data-recent-history></div>
-                            <div class="action-stats" data-action-stats style="display: none;"></div>
-                        </div>
-                    </section>
-                </div>
-            </div>
-        `;
-    }
-
-    private updateInputTabFileCount(state: WorkCenterState): void {
-        if (!this.container) return;
-        const filesTabBtn = this.container.querySelector('[data-action="switch-input-tab"][data-tab="attachments"]') as HTMLElement | null;
-        if (filesTabBtn) {
-            filesTabBtn.textContent = `Files (${state.files.length})`;
-        }
-    }
-
-    private updateResultsPipelineTabState(state: WorkCenterState): void {
-        if (!this.container) return;
-        const hasPipelineData = Boolean(state.recognizedData || (state.processedData && state.processedData.length > 0));
-        const pipelineCount = (state.recognizedData ? 1 : 0) + (state.processedData?.length || 0);
-        const tabsRoot = this.container.querySelector('[data-results-tabs]') as HTMLElement | null;
-        const pipelineTabBtn = this.container.querySelector('[data-action="switch-results-tab"][data-tab="pipeline"]') as HTMLButtonElement | null;
-        if (!tabsRoot || !pipelineTabBtn) return;
-
-        pipelineTabBtn.textContent = `Pipeline (${pipelineCount})`;
-        pipelineTabBtn.disabled = !hasPipelineData;
-
-        const activeTab = tabsRoot.getAttribute('data-active-tab') || 'output';
-        if (!hasPipelineData && activeTab === 'pipeline') {
-            tabsRoot.setAttribute('data-active-tab', 'output');
-            state.activeResultsTab = 'output';
-
-            const outputBtn = this.container.querySelector('[data-action="switch-results-tab"][data-tab="output"]') as HTMLButtonElement | null;
-            if (outputBtn) {
-                outputBtn.classList.add('is-active');
-                outputBtn.setAttribute('aria-selected', 'true');
-            }
-            pipelineTabBtn.classList.remove('is-active');
-            pipelineTabBtn.setAttribute('aria-selected', 'false');
-
-            const outputPanel = this.container.querySelector('[data-results-tab-panel="output"]') as HTMLElement | null;
-            const pipelinePanel = this.container.querySelector('[data-results-tab-panel="pipeline"]') as HTMLElement | null;
-            outputPanel?.classList.add('is-active');
-            pipelinePanel?.classList.remove('is-active');
-        }
+    revokeAllPreviewUrls(_state: WorkCenterState): void {
+        this.attachments.revokeAllPreviewUrls(_state);
     }
 }

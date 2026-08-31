@@ -81,7 +81,6 @@ export class WorkCenterView extends UIElement implements View {
     private pendingRenderAfterMount = false;
     private resultObserver: MutationObserver | null = null;
     private _sheet: CSSStyleSheet | null = null;
-    private readonly autoFileFingerprints = new Set<string>();
     private processedInboundMessageIds = new Set<string>();
     private pendingMessages: WorkCenterInboundMessage[] = [];
     /** True after this instance acquired a refcount on the shared workcenter document stylesheet. */
@@ -252,19 +251,13 @@ export class WorkCenterView extends UIElement implements View {
         };
     }
 
-    addFiles(files: File[]): void {
-        const state = this.manager?.getState();
-        if (!state || files.length === 0) return;
-        const added = this.appendUniqueAutoFiles(state.files, files);
-        if (added <= 0) return;
-        this.requestRender();
-        this.emitFilesChanged();
+    async addFiles(files: File[]): Promise<void> {
+        if (!this.manager || files.length === 0) return;
+        await this.manager.addFiles(files);
     }
 
-    setPrompt(prompt: string): void {
-        const state = this.manager?.getState();
-        if (!state) return;
-        state.currentPrompt = prompt;
+    async setPrompt(prompt: string): Promise<void> {
+        await this.manager?.setPrompt(prompt);
         this.syncPromptInputFromState();
     }
 
@@ -338,15 +331,15 @@ export class WorkCenterView extends UIElement implements View {
         }
 
         if (msg.data?.file) {
-            this.addFiles([msg.data.file]);
+            await this.addFiles([msg.data.file]);
         }
         if (msg.data?.files?.length) {
-            this.addFiles(msg.data.files);
+            await this.addFiles(msg.data.files);
         }
 
         const prompt = msg.data?.text || msg.data?.content || msg.data?.url || "";
         if (prompt.trim()) {
-            this.setPrompt(prompt);
+            await this.setPrompt(prompt);
         }
 
         if (msg.type === "content-process") {
@@ -365,14 +358,19 @@ export class WorkCenterView extends UIElement implements View {
     }
 
     private applyInitialOptions(): void {
-        const state = this.manager?.getState();
-        if (!state) return;
+        if (!this.manager) return;
 
         if (Array.isArray(this.options.initialFiles) && this.options.initialFiles.length > 0) {
-            this.appendUniqueAutoFiles(state.files, this.options.initialFiles);
+            this.pendingMessages.unshift({
+                type: "content-attach",
+                data: { files: this.options.initialFiles }
+            });
         }
         if (typeof this.options.initialPrompt === "string" && this.options.initialPrompt.trim()) {
-            state.currentPrompt = this.options.initialPrompt;
+            this.pendingMessages.unshift({
+                type: "content-share",
+                data: { text: this.options.initialPrompt }
+            });
         }
 
         const initialMessage = this.normalizeInitialDataMessage(this.options.initialData);
@@ -394,19 +392,6 @@ export class WorkCenterView extends UIElement implements View {
         }
     }
 
-    private appendUniqueAutoFiles(target: File[], incoming: File[]): number {
-        let added = 0;
-        for (const file of incoming) {
-            if (!(file instanceof File)) continue;
-            const key = `${String(file.name || "").trim().toLowerCase()}::${Number(file.size || 0)}::${String(file.type || "").trim().toLowerCase()}`;
-            if (this.autoFileFingerprints.has(key)) continue;
-            this.autoFileFingerprints.add(key);
-            target.push(file);
-            added++;
-        }
-        return added;
-    }
-
     private syncPromptInputFromState(): void {
         const state = this.manager?.getState();
         if (!state || !this.element) return;
@@ -420,18 +405,21 @@ export class WorkCenterView extends UIElement implements View {
         this.resultObserver?.disconnect();
         if (!this.element || !this.options.onProcessComplete) return;
 
-        const output = this.element.querySelector("[data-output]") as HTMLElement | null;
-        if (!output) return;
-
-        this.resultObserver = new MutationObserver(() => {
-            const resultNode = output.querySelector(".result-content") as HTMLElement | null;
+        const transcript = this.element.querySelector("[data-workcenter-transcript]") as HTMLElement | null;
+        if (!transcript) return;
+        const emitLatestResult = () => {
+            const resultNode = Array.from(transcript.querySelectorAll(
+                '.workcenter-message--assistant.is-complete .workcenter-message__body'
+            )).at(-1) as HTMLElement | undefined;
             const text = resultNode?.textContent?.trim() || "";
             if (!text || text === this.lastOutputText) return;
             this.lastOutputText = text;
             this.options.onProcessComplete?.(text);
-        });
+        };
+        emitLatestResult();
 
-        this.resultObserver.observe(output, { childList: true, subtree: true, characterData: true });
+        this.resultObserver = new MutationObserver(emitLatestResult);
+        this.resultObserver.observe(transcript, { childList: true, subtree: true, characterData: true });
     }
 
     private emitFilesChanged(): void {

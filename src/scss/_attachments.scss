@@ -1,6 +1,6 @@
 @use "mixins" as wc;
 
-@layer view.workcenter.components {
+@layer components {
     .wc-attachments-section {
         display: flex;
         flex-direction: column;

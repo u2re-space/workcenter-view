@@ -2,7 +2,6 @@
 import { marked, type MarkedExtension } from "marked";
 import markedKatex from "marked-katex-extension";
 import renderMathInElement from "katex/dist/contrib/auto-render.mjs";
-import { validateReadableFileForIngress } from "com/core/view-ingress-validation";
 
 const MATH_DELIMITER_PATTERN = /\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|(?<!\$)\$[^$\n]+\$|\\\([\s\S]*?\\\)/;
 const FENCED_CODE_PATTERN = /(^|\n)(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n\2(?=\n|$)/g;
@@ -92,6 +91,13 @@ import { WorkCenterResults } from "./WorkCenterResults";
 import { WorkCenterAttachments } from "./WorkCenterAttachments";
 import { WorkCenterPrompts } from "./WorkCenterPrompts";
 import { WorkCenterHistory } from "./WorkCenterHistory";
+import { WorkCenterSession } from "./WorkCenterSession";
+import { WorkCenterAttachmentIngress } from "./WorkCenterAttachmentIngress";
+import {
+    createWorkCenterAttachmentStore,
+    createWorkCenterSessionPersistence
+} from "./WorkCenterSessionPersistence";
+import { WorkCenterDocumentPreparer } from "./WorkCenterDocumentPreparation";
 
 export class WorkCenterManager {
     private state: WorkCenterState;
@@ -110,11 +116,31 @@ export class WorkCenterManager {
     private results: WorkCenterResults;
     private history: WorkCenterHistory;
     private events: WorkCenterEvents;
+    private session: WorkCenterSession;
+    private attachmentIngress: WorkCenterAttachmentIngress;
+    private documentPreparer: WorkCenterDocumentPreparer;
+    private sessionReady: Promise<void>;
     private processedMessageIds = new Set<string>();
 
     constructor(dependencies: WorkCenterDependencies) {
         this.deps = dependencies;
         this.state = WorkCenterStateManager.createDefaultState();
+        this.session = new WorkCenterSession(createWorkCenterSessionPersistence());
+        this.attachmentIngress = new WorkCenterAttachmentIngress({
+            state: this.state,
+            store: createWorkCenterAttachmentStore(),
+            onChanged: () => {
+                this.session.setDraft(this.state.draft);
+                void this.session.persistDraft().catch(() => {
+                    this.deps.showMessage("Unable to save the attachment draft");
+                });
+                this.deps.onFilesChanged?.();
+                this.deps.render?.();
+            },
+            onRejected: (reason) => this.deps.showMessage(reason)
+        });
+        this.documentPreparer = new WorkCenterDocumentPreparer();
+        this.sessionReady = this.hydrateSession();
 
         // Initialize sub-modules
         this.dataProcessing = new WorkCenterDataProcessing();
@@ -125,20 +151,44 @@ export class WorkCenterManager {
         this.attachments = new WorkCenterAttachments(dependencies, this.fileOps);
         this.prompts = new WorkCenterPrompts(dependencies, this.templates, this.voice);
         this.results = new WorkCenterResults(dependencies, this.dataProcessing);
-        this.ui = new WorkCenterUI(dependencies, this.attachments, this.prompts, this.results, this.history);
-        this.shareTarget = new WorkCenterShareTarget(dependencies, this.fileOps);
-        this.actions = new WorkCenterActions(dependencies, this.ui, this.fileOps, this.dataProcessing, this.results, this.history, this.templates);
-        this.events = new WorkCenterEvents(
+        this.ui = new WorkCenterUI(
+            dependencies,
+            this.attachments,
+            this.prompts,
+            this.results,
+            this.history,
+            {
+                fileFor: (ref) => this.attachmentIngress.fileFor(ref),
+                getPreviewUrl: (file) => this.attachmentIngress.getPreviewUrl(file)
+            }
+        );
+        this.shareTarget = new WorkCenterShareTarget(
+            dependencies,
+            this.fileOps,
+            async (input) => this.handleIncomingContent(input, "text")
+        );
+        this.actions = new WorkCenterActions(
             dependencies,
             this.ui,
             this.fileOps,
+            this.dataProcessing,
+            this.results,
+            this.history,
+            this.templates,
+            {
+                session: this.session,
+                attachments: this.attachmentIngress,
+                documentPreparer: this.documentPreparer,
+                syncFromSession: () => this.syncStateFromSession()
+            }
+        );
+        this.events = new WorkCenterEvents(
+            dependencies,
             this.actions,
             this.templates,
             this.voice,
-            this.shareTarget,
             this.history,
-            this.attachments,
-            this.prompts,
+            this.attachmentIngress,
             this.state
         );
 
@@ -149,7 +199,7 @@ export class WorkCenterManager {
         registerComponent('workcenter-core', 'workcenter');
 
         // Process any queued messages that were sent before work center was available
-        this.shareTarget.processQueuedMessages(this.state);
+        void this.sessionReady.then(() => this.shareTarget.processQueuedMessages(this.state));
 
         // Process pending messages from component registry
         const pendingMessages = initializeComponent('workcenter-core');
@@ -167,82 +217,128 @@ export class WorkCenterManager {
         }
     }
 
-    // File handling methods - delegate to fileOps module
+    private async hydrateSession(): Promise<void> {
+        try {
+            const snapshot = await this.session.hydrate();
+            const hasPersistedContent = snapshot.messages.length > 0 ||
+                Boolean(snapshot.draft.content) ||
+                snapshot.draft.attachments.length > 0;
+
+            if (hasPersistedContent) {
+                this.state.files = await this.attachmentIngress.hydrate(snapshot.draft.attachments);
+            } else if (this.state.draft.content) {
+                // COMPAT: Preserve a legacy unsent localStorage prompt the first
+                // time this version starts, then keep future drafts in OPFS.
+                this.session.setDraft(this.state.draft);
+                await this.session.persistDraft();
+            }
+            this.syncStateFromSession(false);
+        } catch (error) {
+            console.warn("[WorkCenter] Failed to hydrate local session:", error);
+            this.state.sessionHydrated = true;
+        } finally {
+            this.deps.render?.();
+        }
+    }
+
+    private syncStateFromSession(render = true): void {
+        const snapshot = this.session.snapshot();
+        this.state.messages = snapshot.messages;
+        this.state.draft = snapshot.draft;
+        this.state.currentPrompt = snapshot.draft.content;
+        this.state.sessionEpoch = snapshot.epoch;
+        this.state.sessionHydrated = true;
+        this.deps.onFilesChanged?.();
+        if (render) this.deps.render?.();
+    }
+
+    async addFiles(files: File[]): Promise<void> {
+        await this.sessionReady;
+        await this.attachmentIngress.addFiles(files);
+    }
+
+    async setPrompt(prompt: string): Promise<void> {
+        await this.sessionReady;
+        this.state.draft.content = String(prompt || "");
+        this.state.currentPrompt = this.state.draft.content;
+        this.session.setDraft(this.state.draft);
+        await this.session.persistDraft();
+        this.deps.render?.();
+    }
+
     async handleDroppedContent(content: string, sourceType: string): Promise<void> {
-        return this.fileOps.handleDroppedContent(this.state, content, sourceType);
+        await this.sessionReady;
+        if (sourceType === "url") {
+            await this.attachmentIngress.addUrl(content);
+            return;
+        }
+        await this.appendDraftText(content);
     }
 
     async handlePastedContent(content: string, sourceType: string): Promise<void> {
-        return this.fileOps.handlePastedContent(this.state, content, sourceType);
+        return this.handleDroppedContent(content, sourceType);
     }
 
-    // Handle incoming content from unified messaging system
-    private fingerprintIncomingFile(file: File): string {
-        return `${String(file.name || "").trim().toLowerCase()}::${Number(file.size || 0)}::${String(file.type || "").trim().toLowerCase()}`;
+    private async appendDraftText(content: string): Promise<void> {
+        const text = String(content || "").trim();
+        if (!text) return;
+        this.state.draft.content = [this.state.draft.content, text]
+            .filter(Boolean)
+            .join(this.state.draft.content ? "\n" : "");
+        this.state.currentPrompt = this.state.draft.content;
+        this.session.setDraft(this.state.draft);
+        await this.session.persistDraft();
+        this.deps.render?.();
     }
 
-    private pushUniqueIncomingFile(file: File | null): file is File {
-        if (!file) return false;
-        const key = this.fingerprintIncomingFile(file);
-        for (const existing of this.state.files) {
-            if (this.fingerprintIncomingFile(existing) === key) return false;
-        }
-        this.state.files.push(file);
-        return true;
-    }
-
+    /** Normalize all channel/share payloads into the active conversation draft. */
     private async handleIncomingContent(data: any, contentType: string): Promise<void> {
+        await this.sessionReady;
         try {
-            let attached = false;
-
-            if (Array.isArray(data.files) && data.files.length > 0) {
-                const filesFromArray = data.files.filter((x: unknown): x is File => x instanceof File);
-                for (const f of filesFromArray) {
-                    const chk = validateReadableFileForIngress(f);
-                    // eslint-disable-next-line no-await-in-loop -- sequential attach keeps UX ordering predictable
-                    if (!chk.ok) {
-                        console.warn("[WorkCenter] Skipping oversized/invalid ingress file:", chk.reason, f.name);
-                        continue;
+            const files: File[] = [];
+            if (Array.isArray(data?.files)) {
+                files.push(...data.files.filter((entry: unknown): entry is File => entry instanceof File));
+            }
+            if (data?.file instanceof File) files.push(data.file);
+            if (typeof Blob !== "undefined" && data?.blob instanceof Blob) {
+                files.push(new File(
+                    [data.blob],
+                    String(data.filename || `attachment-${Date.now()}.${contentType === "markdown" ? "md" : "txt"}`),
+                    { type: data.blob.type || "application/octet-stream" }
+                ));
+            }
+            if (Array.isArray(data?.attachments)) {
+                for (const attachment of data.attachments) {
+                    const candidate = attachment?.data;
+                    if (candidate instanceof File) files.push(candidate);
+                    else if (typeof Blob !== "undefined" && candidate instanceof Blob) {
+                        files.push(new File([candidate], String(attachment?.name || `attachment-${Date.now()}`), {
+                            type: candidate.type || "application/octet-stream"
+                        }));
                     }
-                    if (this.pushUniqueIncomingFile(f)) attached = true;
                 }
             }
 
-            let fileToAttach: File | null = null;
+            const attached = await this.attachmentIngress.addFiles(files);
+            if (typeof data?.url === "string") await this.attachmentIngress.addUrl(data.url);
 
-            if (!attached && data.file instanceof File) {
-                fileToAttach = data.file;
-            } else if (!attached && data.blob instanceof Blob) {
-                const filename = data.filename || `attachment-${Date.now()}.${contentType === 'markdown' ? 'md' : 'txt'}`;
-                fileToAttach = new File([data.blob], filename, { type: data.blob.type });
-            } else if (!attached && (data.text || data.content)) {
-                const content = data.text || data.content;
-                const textContent = typeof content === 'string' ? content : JSON.stringify(content, null, 2);
-                const filename = data.filename || `content-${Date.now()}.${contentType === 'markdown' ? 'md' : 'txt'}`;
-                const mimeType = contentType === 'markdown' ? 'text/markdown' : 'text/plain';
-                fileToAttach = new File([textContent], filename, { type: mimeType });
+            const rawText = data?.text ?? data?.content;
+            if (rawText !== undefined && rawText !== null) {
+                const text = typeof rawText === "string"
+                    ? rawText
+                    : JSON.stringify(rawText, null, 2);
+                await this.appendDraftText(text);
             }
-
-            if (fileToAttach) {
-                const chk = validateReadableFileForIngress(fileToAttach);
-                if (!chk.ok) {
-                    console.warn("[WorkCenter] Rejecting primary attachment:", chk.reason);
-                    fileToAttach = null;
-                }
-            }
-
-            if (fileToAttach && this.pushUniqueIncomingFile(fileToAttach)) attached = true;
-
-            if (attached) {
-                this.ui.updateFileList(this.state);
-                this.ui.updateFileCounter(this.state);
+            if (attached.length) {
                 this.deps.showMessage(
-                    fileToAttach ? `Attached ${fileToAttach.name} to Work Center` : "Attached files to Work Center"
+                    attached.length === 1
+                        ? `Attached ${attached[0]?.name || "file"}`
+                        : `Attached ${attached.length} files`
                 );
             }
         } catch (error) {
-            console.warn('[WorkCenter] Failed to handle incoming content:', error);
-            this.deps.showMessage('Failed to attach content');
+            console.warn("[WorkCenter] Failed to attach incoming content:", error);
+            this.deps.showMessage("Failed to attach content");
         }
     }
 
@@ -252,6 +348,7 @@ export class WorkCenterManager {
      */
     async handleExternalMessage(message: any): Promise<void> {
         if (!message) return;
+        await this.sessionReady;
         const messageId = typeof message?.id === "string" ? message.id : "";
         if (messageId) {
             if (this.processedMessageIds.has(messageId)) {
@@ -266,10 +363,7 @@ export class WorkCenterManager {
 
         // Share-target messages should update both attachments and results pipeline.
         if (message.type === 'share-target-input' && message.data) {
-            await this.shareTarget.addShareTargetInput(this.state, message.data);
-            this.ui.updateFileList(this.state);
-            this.ui.updateFileCounter(this.state);
-            this.ui.updateDataPipeline(this.state);
+            await this.handleIncomingContent(message.data, message.contentType || "text");
             return;
         }
 
@@ -309,6 +403,7 @@ export class WorkCenterManager {
         this.prompts.setContainer(null);
         this.results.setContainer(null);
         this.history.setContainer(null);
+        this.attachmentIngress.revokeAllPreviews();
 
         // The WorkCenterCommunicator handles its own cleanup
         // No need to manually close channels here

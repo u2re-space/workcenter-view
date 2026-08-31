@@ -1,7 +1,14 @@
+import type { WorkCenterDraft, WorkCenterMessage } from "./WorkCenterSession";
+
 export interface WorkCenterState {
     files: File[];
     selectedFiles: File[];
     currentPrompt: string;
+    /** Durable conversation values; `files/currentPrompt` remain narrow legacy draft aliases. */
+    draft: WorkCenterDraft;
+    messages: WorkCenterMessage[];
+    sessionEpoch: number;
+    sessionHydrated: boolean;
     autoAction: boolean;
     selectedInstruction: string;
     outputFormat: "auto" | "markdown" | "json" | "text" | "raw" | "html" | "code";
@@ -51,10 +58,16 @@ export class WorkCenterStateManager {
     private static readonly TEMPLATES_STORAGE_KEY = "rs-workcenter-templates";
 
     static createDefaultState(): WorkCenterState {
+        const legacy = this.loadWorkCenterState();
+        const legacyPrompt = String(legacy.currentPrompt || "");
         return {
             files: [],
             selectedFiles: [],
-            currentPrompt: "",
+            currentPrompt: legacyPrompt,
+            draft: { content: legacyPrompt, attachments: [] },
+            messages: [],
+            sessionEpoch: 0,
+            sessionHydrated: false,
             autoAction: false,
             selectedInstruction: "",
             outputFormat: "auto",
@@ -70,14 +83,13 @@ export class WorkCenterStateManager {
             recognizedData: null,
             processedData: null,
             currentProcessingStep: 0,
-            ...this.loadWorkCenterState() // Load persisted state
+            ...legacy
         };
     }
 
     static saveState(state: WorkCenterState): void {
         try {
             const stateToSave = {
-                currentPrompt: state.currentPrompt,
                 autoAction: state.autoAction,
                 selectedInstruction: state.selectedInstruction,
                 outputFormat: state.outputFormat,

@@ -1,5 +1,3 @@
-import { executionCore } from "com/service/misc/ExecutionCore";
-import type { ActionContext, ActionInput } from "com/service/misc/ActionHistory";
 import type { WorkCenterState, WorkCenterDependencies } from "./WorkCenterState";
 import type { WorkCenterUI } from "./WorkCenterUI";
 import type { WorkCenterFileOps } from "./WorkCenterFileOps";
@@ -9,6 +7,21 @@ import type { WorkCenterHistory } from "./WorkCenterHistory";
 import type { WorkCenterTemplates } from "./WorkCenterTemplates";
 import { extractJSONFromAIResponse } from "core/document/AIResponseParser";
 import { shouldHandoffViewToSibling, stashSkuHandoff } from "com/config/ecosystem-skus";
+import { runWorkCenterTurn } from "com/service/service/RecognizeData";
+import {
+    type WorkCenterMessage,
+    type WorkCenterRequestOptions,
+    type WorkCenterSession
+} from "./WorkCenterSession";
+import type { WorkCenterAttachmentIngress } from "./WorkCenterAttachmentIngress";
+import type { WorkCenterDocumentPreparer } from "./WorkCenterDocumentPreparation";
+
+export type WorkCenterConversationServices = {
+    session: WorkCenterSession;
+    attachments: WorkCenterAttachmentIngress;
+    documentPreparer: WorkCenterDocumentPreparer;
+    syncFromSession: () => void;
+};
 
 export class WorkCenterActions {
     private deps: WorkCenterDependencies;
@@ -18,6 +31,8 @@ export class WorkCenterActions {
     private results: WorkCenterResults;
     private history: WorkCenterHistory;
     private templates: WorkCenterTemplates;
+    private conversation?: WorkCenterConversationServices;
+    private activeTurns = new Map<string, AbortController>();
 
     constructor(
         dependencies: WorkCenterDependencies,
@@ -26,7 +41,8 @@ export class WorkCenterActions {
         dataProcessing: WorkCenterDataProcessing,
         results: WorkCenterResults,
         history: WorkCenterHistory,
-        templates?: WorkCenterTemplates
+        templates?: WorkCenterTemplates,
+        conversation?: WorkCenterConversationServices
     ) {
         this.deps = dependencies;
         this.ui = ui;
@@ -35,9 +51,14 @@ export class WorkCenterActions {
         this.results = results;
         this.history = history;
         this.templates = templates!;
+        this.conversation = conversation;
     }
 
     async executeUnifiedAction(state: WorkCenterState): Promise<void> {
+        if (this.conversation) {
+            await this.executeConversationTurn(state);
+            return;
+        }
         if (this.fileOps.getFilesForProcessing(state).length === 0 && !state.currentPrompt.trim() && !state.recognizedData) {
             this.deps.showMessage('Please select files or enter a prompt first');
             return;
@@ -206,6 +227,209 @@ export class WorkCenterActions {
         this.ui.updateDataCounters(state);
     }
 
+    async persistDraft(state: WorkCenterState): Promise<void> {
+        const conversation = this.conversation;
+        if (!conversation) return;
+        state.currentPrompt = state.draft.content;
+        conversation.session.setDraft(state.draft);
+        await conversation.session.persistDraft();
+    }
+
+    private requestOptions(state: WorkCenterState): WorkCenterRequestOptions {
+        return {
+            outputFormat: state.outputFormat,
+            language: state.selectedLanguage,
+            recognitionFormat: state.recognitionFormat,
+            processingFormat: state.processingFormat
+        };
+    }
+
+    private async conversationInstruction(state: WorkCenterState): Promise<string> {
+        const base = state.selectedTemplate.trim() ||
+            "Answer the newest user message using its attached content as context.";
+        let instruction = this.templates.resolveInstruction(state.selectedInstruction);
+        if (!instruction && !state.selectedInstruction) {
+            instruction = await this.templates.getActiveInstruction();
+        }
+        return this.templates.buildPromptWithInstruction(base, instruction);
+    }
+
+    private syncConversationState(state: WorkCenterState): void {
+        const conversation = this.conversation;
+        if (!conversation) return;
+        const snapshot = conversation.session.snapshot();
+        state.messages = snapshot.messages;
+        state.draft = snapshot.draft;
+        state.currentPrompt = snapshot.draft.content;
+        state.sessionEpoch = snapshot.epoch;
+        conversation.syncFromSession();
+    }
+
+    private async executeConversationTurn(state: WorkCenterState): Promise<void> {
+        const conversation = this.conversation;
+        if (!conversation) return;
+        if (this.activeTurns.size > 0) {
+            this.deps.showMessage("Wait for the current response before sending another message");
+            return;
+        }
+        if (!state.draft.content.trim() && state.draft.attachments.length === 0) {
+            this.deps.showMessage("Enter a prompt or attach a file first");
+            return;
+        }
+
+        await this.persistDraft(state);
+        const submitted = await conversation.session.submitDraft(this.requestOptions(state));
+        state.files = [];
+        this.syncConversationState(state);
+
+        const controller = new AbortController();
+        this.activeTurns.set(submitted.assistant.id, controller);
+        await this.runConversationTurn(state, submitted.user, submitted.assistant, controller);
+    }
+
+    async retryConversationTurn(state: WorkCenterState, assistantId: string): Promise<void> {
+        const conversation = this.conversation;
+        if (!conversation || this.activeTurns.size > 0) return;
+
+        try {
+            const retry = await conversation.session.retry(assistantId);
+            this.syncConversationState(state);
+            const controller = new AbortController();
+            this.activeTurns.set(retry.assistant.id, controller);
+            await this.runConversationTurn(state, retry.user, retry.assistant, controller);
+        } catch (error) {
+            this.deps.showMessage(
+                error instanceof Error ? error.message : "Unable to retry this message"
+            );
+        }
+    }
+
+    async cancelConversationTurn(state: WorkCenterState, assistantId: string): Promise<void> {
+        const conversation = this.conversation;
+        if (!conversation) return;
+        this.activeTurns.get(assistantId)?.abort();
+        this.activeTurns.delete(assistantId);
+        await conversation.session.cancel(assistantId);
+        this.syncConversationState(state);
+    }
+
+    async startNewConversation(state: WorkCenterState): Promise<void> {
+        const conversation = this.conversation;
+        if (!conversation) return;
+        for (const controller of this.activeTurns.values()) controller.abort();
+        this.activeTurns.clear();
+        conversation.attachments.revokeAllPreviews();
+        await conversation.session.newChat();
+        state.files = [];
+        this.syncConversationState(state);
+    }
+
+    private async runConversationTurn(
+        state: WorkCenterState,
+        user: WorkCenterMessage,
+        assistant: WorkCenterMessage,
+        controller: AbortController
+    ): Promise<void> {
+        const conversation = this.conversation;
+        if (!conversation) return;
+        const epoch = conversation.session.epoch();
+
+        try {
+            const prepared = [];
+            for (const ref of user.attachments) {
+                const file = await conversation.attachments.resolve(ref);
+                if (!file) {
+                    await conversation.session.markAttachmentError(
+                        user.id,
+                        ref.hash,
+                        "Attachment data is unavailable"
+                    );
+                    prepared.push({
+                        attachmentId: ref.hash,
+                        original: new File([], ref.name, { type: ref.type }),
+                        kind: "unknown" as const,
+                        images: [],
+                        error: "Attachment data is unavailable"
+                    });
+                    continue;
+                }
+                const preparedAttachment = await conversation.documentPreparer.prepare(file);
+                if (preparedAttachment.error) {
+                    await conversation.session.markAttachmentError(
+                        user.id,
+                        ref.hash,
+                        preparedAttachment.error
+                    );
+                }
+                prepared.push({
+                    attachmentId: ref.hash,
+                    ...preparedAttachment
+                });
+            }
+
+            const messages = conversation.session.snapshot().messages
+                .filter((message) => message.status === "complete")
+                .map((message) => ({ role: message.role, content: message.content }));
+            const result = await runWorkCenterTurn({
+                messages,
+                attachments: prepared,
+                instruction: await this.conversationInstruction(state),
+                options: {
+                    outputFormat: state.processingFormat,
+                    outputLanguage: state.selectedLanguage,
+                    processingEffort: "medium",
+                    processingVerbosity: "medium"
+                },
+                signal: controller.signal
+            });
+
+            if (epoch !== conversation.session.epoch()) return;
+            if (controller.signal.aborted || result.error === "Cancelled") {
+                await conversation.session.cancel(assistant.id);
+            } else if (result.ok) {
+                const content = String(result.data || "");
+                await conversation.session.completeAssistant(assistant.id, {
+                    status: "complete",
+                    content,
+                    rawResult: result
+                });
+                state.lastRawResult = result;
+                state.recognizedData = {
+                    content,
+                    timestamp: Date.now(),
+                    source: user.attachments.length ? "files" : "text",
+                    recognizedAs: "markdown",
+                    responseId: result.responseId || undefined
+                };
+            } else {
+                await conversation.session.completeAssistant(assistant.id, {
+                    status: "failed",
+                    content: "",
+                    error: result.error || "The request did not return a response"
+                });
+            }
+        } catch (error) {
+            if (epoch === conversation.session.epoch()) {
+                await conversation.session.completeAssistant(assistant.id, {
+                    status: controller.signal.aborted ? "cancelled" : "failed",
+                    content: "",
+                    error: controller.signal.aborted
+                        ? "Cancelled"
+                        : (error instanceof Error ? error.message : "Failed to process message")
+                });
+            }
+        } finally {
+            if (this.activeTurns.get(assistant.id) === controller) {
+                this.activeTurns.delete(assistant.id);
+            }
+            if (epoch === conversation.session.epoch()) {
+                this.syncConversationState(state);
+                this.history.updateRecentHistory(state);
+                this.ui.updateDataPipeline(state);
+            }
+        }
+    }
+
     private getLastSuccessfulPrompt(): string {
         return this.history.getLastSuccessfulPrompt();
     }
@@ -223,6 +447,22 @@ export class WorkCenterActions {
         } catch (error) {
             console.error('Failed to copy results:', error);
             this.deps.showMessage('Failed to copy results');
+        }
+    }
+
+    async copyConversationTurn(state: WorkCenterState, turnId: string): Promise<void> {
+        const message = state.messages.find(
+            (candidate) => candidate.id === turnId && candidate.role === "assistant"
+        );
+        if (!message) return;
+        try {
+            await this.dataProcessing.copyResultsToClipboard(
+                message.rawResult ?? { content: message.content },
+                state.outputFormat
+            );
+            this.deps.showMessage("Response copied to clipboard");
+        } catch {
+            this.deps.showMessage("Failed to copy response");
         }
     }
 

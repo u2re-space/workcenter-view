@@ -8,10 +8,16 @@ import type { WorkCenterFileOps } from "./WorkCenterFileOps";
 export class WorkCenterShareTarget {
     private deps: WorkCenterDependencies;
     private _fileOps: WorkCenterFileOps;
+    private ingestInput?: (input: unknown) => Promise<void>;
 
-    constructor(dependencies: WorkCenterDependencies, fileOps: WorkCenterFileOps) {
+    constructor(
+        dependencies: WorkCenterDependencies,
+        fileOps: WorkCenterFileOps,
+        ingestInput?: (input: unknown) => Promise<void>
+    ) {
         this.deps = dependencies;
         this._fileOps = fileOps;
+        this.ingestInput = ingestInput;
         // Keep a stable constructor contract while migration is in progress.
         void this._fileOps;
     }
@@ -104,6 +110,10 @@ export class WorkCenterShareTarget {
 
     async addShareTargetInput(state: WorkCenterState, inputData: any): Promise<void> {
         console.log('[WorkCenter] Adding share target input:', summarizeForLog(inputData));
+        if (this.ingestInput) {
+            await this.ingestInput(inputData);
+            return;
+        }
 
         try {
             let filesAdded = 0;

@@ -1,4 +1,4 @@
-@layer view.workcenter.tokens {
+@layer tokens {
     :is(html, body):has([data-view="workcenter"]) {
         --view-layout: "grid";
         --view-sidebar-visible: true;
@@ -7,7 +7,7 @@
     }
 }
 
-@layer view.workcenter.base {
+@layer base {
     /* Standalone custom element host (shadow content is styled via adopted sheets on shadowRoot). */
     cw-workcenter-view {
         display: block;

@@ -36,10 +36,13 @@
 // 7. Results - output/results display
 @use "results";
 
-// 8. Animations - animation classes and modal styles
+// 8. Conversation-first shell overrides legacy dashboard parts.
+@use "conversation";
+
+// 9. Animations - animation classes and modal styles
 @use "animations";
 
-@layer view.workcenter.tokens, view.workcenter.base, view.workcenter.layout, view.workcenter.components, view.workcenter.utilities, view.workcenter.overrides;
+
 
 // Note: The main workcenter.scss file contains the core view styles
 // and is imported separately at the view level.
