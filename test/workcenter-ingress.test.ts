@@ -134,10 +134,102 @@ test("attachment ingress persists a draft once for equal content", async () => {
     };
     const ingress = new WorkCenterAttachmentIngress({ state, store });
 
-    const added = await ingress.addFiles([file, new File(["same"], "two.txt", { type: "text/plain" })]);
+    await ingress.addFiles([file, new File(["same"], "two.txt", { type: "text/plain" })]);
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.equal(state.draft.attachments.length, 1);
+    assert.equal(state.files.length, 1);
+    assert.equal(state.draft.attachments[0]?.hash, "same-content");
+});
+
+test("attachment ingress removes a draft file and keeps remaining files", async () => {
+    const first = new File(["one"], "one.txt", { type: "text/plain", lastModified: 1 });
+    const second = new File(["two"], "two.txt", { type: "text/plain", lastModified: 2 });
+    const state = {
+        files: [] as File[],
+        draft: { content: "", attachments: [] as Array<any> }
+    };
+    let nextHash = 0;
+    const ingress = new WorkCenterAttachmentIngress({
+        state,
+        store: {
+            async put(input: File) {
+                nextHash += 1;
+                return {
+                    hash: `hash-${nextHash}`,
+                    path: `/user/workcenter/blobs/hash-${nextHash}`,
+                    name: input.name,
+                    type: input.type,
+                    size: input.size,
+                    lastModified: input.lastModified
+                };
+            },
+            async get() {
+                return null;
+            }
+        }
+    });
+
+    await ingress.addFiles([first, second]);
+    ingress.remove("hash-1");
+
+    assert.equal(state.draft.attachments.length, 1);
+    assert.equal(state.draft.attachments[0]?.hash, "hash-2");
+    assert.equal(state.files.length, 1);
+    assert.equal(state.files[0], second);
+});
+
+test("attachment ingress adds a draft file before durable put resolves", async () => {
+    const file = new File(["queued"], "queued.txt", { type: "text/plain", lastModified: 4 });
+    const state = {
+        files: [] as File[],
+        draft: { content: "", attachments: [] as Array<any> }
+    };
+    let changed = 0;
+    const ingress = new WorkCenterAttachmentIngress({
+        state,
+        store: {
+            put: () => new Promise(() => undefined),
+            async get() {
+                return null;
+            }
+        },
+        onChanged: () => {
+            changed += 1;
+        }
+    });
+
+    const added = await ingress.addFiles([file]);
 
     assert.equal(added.length, 1);
-    assert.equal(state.files.length, 1);
     assert.equal(state.draft.attachments.length, 1);
-    assert.equal(state.draft.attachments[0]?.hash, "same-content");
+    assert.equal(state.files[0], file);
+    assert.ok(changed >= 1);
+});
+
+test("attachment ingress keeps a draft file when durable storage fails", async () => {
+    const file = new File(["keep"], "keep.txt", { type: "text/plain", lastModified: 3 });
+    const state = {
+        files: [] as File[],
+        draft: { content: "", attachments: [] as Array<any> }
+    };
+    const ingress = new WorkCenterAttachmentIngress({
+        state,
+        store: {
+            async put() {
+                throw new Error("OPFS unavailable");
+            },
+            async get() {
+                return null;
+            }
+        }
+    });
+
+    const added = await ingress.addFiles([file]);
+
+    assert.equal(added.length, 1);
+    assert.equal(state.draft.attachments.length, 1);
+    assert.equal(state.files[0], file);
+    assert.equal(state.draft.attachments[0]?.name, "keep.txt");
 });

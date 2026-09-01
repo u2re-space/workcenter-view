@@ -210,23 +210,62 @@
 
     .wc-attachment-chip {
         display: inline-flex;
-        align-items: center;
+        align-items: stretch;
         min-inline-size: 0;
-        max-inline-size: 100%;
-        gap: var(--space-xs);
-        padding: var(--space-xs) var(--space-sm);
+        max-inline-size: min(18rem, 100%);
+        gap: var(--space-2xs);
+        padding: var(--space-xs);
         border: 0;
-        border-radius: var(--radius-full);
+        border-radius: var(--shape-medium);
         background: color-mix(in oklab, var(--color-on-surface) 6%, transparent);
         color: inherit;
         font-size: var(--text-xs);
     }
 
-    .wc-attachment-chip__preview {
-        inline-size: 1.5rem;
-        block-size: 1.5rem;
-        border-radius: var(--radius-full);
+    .wc-attachment-chip__open {
+        display: inline-flex;
+        align-items: center;
+        min-inline-size: 0;
+        flex: 1 1 auto;
+        gap: var(--space-xs);
+        padding: 0;
+        border: 0;
+        background: transparent;
+        color: inherit;
+        cursor: pointer;
+        text-align: start;
+
+        &:focus-visible {
+            outline: 0;
+            box-shadow: var(--focus-ring);
+        }
+    }
+
+    .wc-attachment-chip__preview,
+    .wc-attachment-chip__glyph {
+        flex: 0 0 auto;
+        inline-size: 2.75rem;
+        block-size: 2.75rem;
+        border-radius: var(--shape-small);
         object-fit: cover;
+    }
+
+    .wc-attachment-chip.is-image .wc-attachment-chip__preview {
+        inline-size: 4.5rem;
+        block-size: 4.5rem;
+    }
+
+    .wc-attachment-chip__glyph {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: color-mix(in oklab, var(--color-on-surface) 8%, transparent);
+    }
+
+    .wc-attachment-chip__copy {
+        display: grid;
+        min-inline-size: 0;
+        gap: 0.1rem;
     }
 
     .wc-attachment-chip__label {
@@ -239,50 +278,165 @@
     }
 
     .wc-attachment-chip__meta {
-        flex: 0 0 auto;
+        min-inline-size: 0;
+        overflow: hidden;
         opacity: 0.65;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .wc-attachment-chip__actions {
+        display: inline-flex;
+        flex: 0 0 auto;
+        align-items: center;
     }
 
     .wc-chip-remove {
-        min-inline-size: 1.75rem;
-        min-block-size: 1.75rem;
-        margin-inline-end: calc(var(--space-xs) * -1);
+        min-inline-size: var(--touch-min);
+        min-block-size: var(--touch-min);
+        overflow: visible;
         color: var(--color-on-surface-variant);
     }
 
     .workcenter-composer {
+        --wc-composer-min: calc-size(fit-content, 1rem + size);
         display: flex;
         flex-direction: column;
         gap: var(--space-sm);
         padding: var(--space-sm);
+        padding-block-start: var(--space-md);
         border: 0;
         border-radius: var(--shape-extra-large);
         background: var(--color-surface-container);
         box-shadow: var(--elev-1);
         transition: background-color var(--transition-fast), box-shadow var(--transition-fast);
+        position: relative;
+        min-block-size: var(--wc-composer-min, 4.5rem);
+        block-size: max-content;
+        max-block-size: min(72dvh, 75%);
+        overflow: auto;
 
         &:has(.prompt-input:focus-visible),
         &.is-dragging {
             background: var(--color-surface-container-high);
             box-shadow: var(--focus-ring), var(--elev-1);
         }
+
+        &.has-attachments {
+            max-block-size: min(80dvh, 88%);
+        }
+    }
+
+    .workcenter-composer__resize {
+        position: absolute;
+        inset-block-start: 0;
+        inset-inline: 0;
+        z-index: 1;
+        block-size: 0.85rem;
+        cursor: ns-resize;
+        touch-action: none;
+
+        &::before {
+            content: "";
+            display: block;
+            inline-size: 2.5rem;
+            block-size: 0.22rem;
+            margin: 0.28rem auto 0;
+            border-radius: var(--radius-full);
+            background: color-mix(in oklab, var(--color-on-surface) 28%, transparent);
+        }
+    }
+
+    .workcenter-composer__files {
+        display: grid;
+        gap: var(--space-xs);
+        padding: var(--space-xs);
+        border-radius: var(--shape-medium);
+        background: color-mix(in oklab, var(--color-on-surface) 7%, transparent);
+
+        &[hidden] {
+            display: none !important;
+        }
+    }
+
+    .workcenter-composer__files-head {
+        color: var(--color-primary);
+        font-size: var(--text-xs);
+        font-weight: var(--font-weight-semibold);
     }
 
     .workcenter-composer__attachments:empty {
         display: none;
     }
 
+    .wc-attach-button {
+        position: relative;
+        overflow: visible;
+        cursor: pointer;
+        pointer-events: auto;
+
+        input {
+            cursor: pointer;
+            pointer-events: auto;
+        }
+
+        ui-icon {
+            pointer-events: none;
+            cursor: pointer;
+        }
+
+        span {
+            pointer-events: none;
+            display: flex;
+            place-items: center;
+            place-content: center;
+        }
+    }
+
+    .wc-attach-count {
+        position: absolute;
+        inset-block-start: 0.15rem;
+        inset-inline-end: 0.15rem;
+        min-inline-size: 1.1rem;
+        min-block-size: 1.1rem;
+        padding-inline: 0.2rem;
+        border-radius: var(--radius-full);
+        background: var(--color-primary);
+        color: var(--color-on-primary);
+        font-size: 0.65rem;
+        font-weight: 700;
+        line-height: 1.1rem;
+        text-align: center;
+
+        &[hidden] {
+            display: none !important;
+        }
+    }
+
+    .wc-file-picker {
+        position: absolute;
+        inset: 0;
+        inline-size: 100%;
+        block-size: 100%;
+        margin: 0;
+        opacity: 0;
+        cursor: pointer;
+    }
+
     .workcenter-composer__input-row {
         display: flex;
         align-items: end;
         gap: var(--space-xs);
+        block-size: max-content;
+        max-block-size: stretch;
     }
 
     .workcenter-chat .prompt-input {
         flex: 1 1 auto;
+        flex-basis: auto;
         min-inline-size: 0;
-        min-block-size: var(--touch-min);
-        max-block-size: 12rem;
+        min-block-size: max(var(--touch-min, 100%), 100%);
+        max-block-size: stretch;//min(28rem, 55dvh);
         padding: var(--space-md);
         border: 0;
         border-radius: var(--shape-large);
@@ -291,6 +445,9 @@
         box-shadow: none;
         font: inherit;
         line-height: var(--leading-normal);
+        field-sizing: content;
+        block-size: fit-content;
+        overflow-y: auto;
         resize: none;
 
         &:hover,
@@ -340,17 +497,85 @@
             border: 0;
             border-radius: var(--shape-small);
             background-color: var(--color-surface-container-low);
+            pointer-events: auto;
 
             &:focus-visible {
                 border: 0;
                 box-shadow: var(--focus-ring);
             }
         }
+
+        button {
+            max-inline-size: 2rem;
+            max-block-size: 2rem;
+        }
     }
 
     .workcenter-secondary-panel {
         inset-block-start: calc(var(--touch-min) + var(--space-lg));
         inline-size: fit-content;
+    }
+
+    .wc-attachment-viewer {
+        inline-size: min(56rem, calc(100% - var(--space-lg) * 2));
+        max-inline-size: 96vw;
+        max-block-size: 92dvh;
+        padding: 0;
+        border: 0;
+        border-radius: var(--shape-large);
+        background: var(--color-surface-container-high);
+        color: var(--color-on-surface);
+        box-shadow: var(--elev-3);
+    }
+
+    .wc-attachment-viewer::backdrop {
+        background: color-mix(in oklab, black 56%, transparent);
+    }
+
+    .wc-attachment-viewer__header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: var(--space-sm);
+        padding: var(--space-sm) var(--space-md);
+
+        h3 {
+            min-inline-size: 0;
+            margin: 0;
+            overflow: hidden;
+            font-size: var(--text-sm);
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+    }
+
+    .wc-attachment-viewer__body {
+        max-block-size: 80dvh;
+        overflow: auto;
+        padding: 0 var(--space-md) var(--space-md);
+    }
+
+    .wc-attachment-viewer__frame {
+        display: block;
+        inline-size: 100%;
+        min-block-size: min(32rem, 70dvh);
+        max-block-size: 80dvh;
+        border: 0;
+        border-radius: var(--shape-small);
+        object-fit: contain;
+        background: color-mix(in oklab, var(--color-on-surface) 6%, transparent);
+    }
+
+    .wc-attachment-viewer__text {
+        margin: 0;
+        padding: var(--space-sm);
+        border-radius: var(--shape-small);
+        background: color-mix(in oklab, var(--color-on-surface) 6%, transparent);
+        overflow: auto;
+        font-family: var(--font-family-mono);
+        font-size: var(--text-sm);
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
     }
 
     @container (max-inline-size: 640px) {

@@ -2,8 +2,8 @@
  * Work Center's single attachment mutation path.
  *
  * FIND:workcenter-attachment-ingress
- * INVARIANT: Validation and persistence finish before a draft receives a new
- * reference, preventing partial attachments after a failed paste or drop.
+ * INVARIANT: The live draft receives a file before OPFS persistence, so a hung
+ * worker cannot hide an attachment the user just picked or dropped.
  */
 import { validateReadableFileForIngress } from "com/core/view-ingress-validation";
 import type { StoredBlobRef } from "@fest-lib/lure";
@@ -28,6 +28,32 @@ export type WorkCenterAttachmentIngressOptions = {
 
 const toRef = (ref: StoredBlobRef): WorkCenterAttachmentRef => ({ ...ref });
 
+const asFile = (value: File): File => {
+    if (typeof File !== "undefined" && value instanceof File) return value;
+    const blob = value as Blob;
+    return new File([blob], String((value as File)?.name || "attachment"), {
+        type: String((value as File)?.type || blob.type || "application/octet-stream"),
+        lastModified: Number((value as File)?.lastModified) || Date.now()
+    });
+};
+
+const toHex = (bytes: ArrayBuffer): string =>
+    [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+
+const localHash = async (file: File): Promise<string> => {
+    const bytes = await file.arrayBuffer();
+    try {
+        if (globalThis.crypto?.subtle) {
+            return toHex(await globalThis.crypto.subtle.digest("SHA-256", bytes));
+        }
+    } catch {
+        /* fall through to a local fingerprint */
+    }
+    let hash = 2166136261;
+    for (const byte of new Uint8Array(bytes)) hash = Math.imul(hash ^ byte, 16777619);
+    return `fnv-${(hash >>> 0).toString(16)}-${file.size}`;
+};
+
 const nameForUrl = (url: string): string => {
     try {
         const parsed = new URL(url);
@@ -46,30 +72,64 @@ export class WorkCenterAttachmentIngress {
 
     async addFiles(files: Iterable<File>): Promise<WorkCenterAttachmentRef[]> {
         const added: WorkCenterAttachmentRef[] = [];
-        for (const file of files) {
+        for (const incoming of files) {
+            const file = asFile(incoming);
             const validation = validateReadableFileForIngress(file);
             if (!validation.ok) {
                 this.options.onRejected?.(validation.reason || "Unsupported file");
                 continue;
             }
-
-            try {
-                const ref = toRef(await this.options.store.put(file));
-                if (this.options.state.draft.attachments.some((item) => item.hash === ref.hash)) {
-                    continue;
-                }
-                this.options.state.draft.attachments.push(ref);
-                this.options.state.files.push(file);
-                this.filesByHash.set(ref.hash, file);
-                added.push(ref);
-            } catch (error) {
-                this.options.onRejected?.(
-                    error instanceof Error ? error.message : "Unable to store attachment"
-                );
+            const hash = await localHash(file);
+            if (
+                this.filesByHash.has(hash) ||
+                this.options.state.draft.attachments.some((item) => item.hash === hash)
+            ) {
+                continue;
             }
+
+            const ref: WorkCenterAttachmentRef = {
+                hash,
+                path: "",
+                name: file.name || "attachment",
+                type: file.type || "application/octet-stream",
+                size: file.size,
+                lastModified: file.lastModified || Date.now()
+            };
+            this.options.state.draft.attachments.push(ref);
+            this.options.state.files.push(file);
+            this.filesByHash.set(ref.hash, file);
+            added.push(ref);
+            void this.persistInBackground(file, ref);
         }
         if (added.length) this.options.onChanged?.();
         return added;
+    }
+
+    private async persistInBackground(file: File, ref: WorkCenterAttachmentRef): Promise<void> {
+        try {
+            const stored = toRef(await this.options.store.put(file));
+            const draftRef = this.options.state.draft.attachments.find((item) => item.hash === ref.hash);
+            if (!draftRef) return;
+            const duplicate = this.options.state.draft.attachments.find((item) =>
+                item !== draftRef && item.hash === stored.hash
+            );
+            if (duplicate) {
+                this.remove(ref.hash);
+                return;
+            }
+            this.filesByHash.set(stored.hash, file);
+            Object.assign(draftRef, stored);
+            this.options.onChanged?.();
+        } catch {
+            try {
+                const hash = await localHash(file);
+                const draftRef = this.options.state.draft.attachments.find((item) => item.hash === ref.hash);
+                if (draftRef && !this.filesByHash.has(hash)) draftRef.hash = hash;
+                this.filesByHash.set(hash, file);
+            } catch {
+                /* keep the live memory ref */
+            }
+        }
     }
 
     /** Store a URL as a local text file while retaining link-card metadata. */
@@ -112,17 +172,21 @@ export class WorkCenterAttachmentIngress {
     }
 
     remove(hash: string): void {
+        if (!hash) return;
         const file = this.filesByHash.get(hash);
         if (file) this.revokePreview(file);
         this.filesByHash.delete(hash);
         this.options.state.draft.attachments = this.options.state.draft.attachments
             .filter((attachment) => attachment.hash !== hash);
-        this.options.state.files = this.options.state.files.filter((candidate) => candidate !== file);
+        /* WHY: rebuild from the draft map so a missing Weak/identity match cannot leave a stale File. */
+        this.options.state.files = this.options.state.draft.attachments
+            .map((attachment) => this.filesByHash.get(attachment.hash))
+            .filter((candidate): candidate is File => Boolean(candidate));
         this.options.onChanged?.();
     }
 
-    getPreviewUrl(file: File): string | null {
-        if (!file.type.startsWith("image/")) return null;
+    /** Blob URL for any stored file so the viewer can open PDFs and downloads, not only image thumbs. */
+    objectUrlFor(file: File): string | null {
         const existing = this.previewUrls.get(file);
         if (existing) return existing;
         try {
@@ -132,6 +196,11 @@ export class WorkCenterAttachmentIngress {
         } catch {
             return null;
         }
+    }
+
+    getPreviewUrl(file: File): string | null {
+        if (!file.type.startsWith("image/")) return null;
+        return this.objectUrlFor(file);
     }
 
     revokePreview(file: File): void {

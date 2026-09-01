@@ -12,10 +12,14 @@ import type { WorkCenterTemplates } from "./WorkCenterTemplates";
 import type { WorkCenterVoice } from "./WorkCenterVoice";
 import type { WorkCenterHistory } from "./WorkCenterHistory";
 import type { WorkCenterAttachmentIngress } from "./WorkCenterAttachmentIngress";
+import type { WorkCenterAttachmentRef } from "./WorkCenterSession";
 import { collectAttachmentCandidates } from "../../../../projects/fl.ui/src/ui/inputs/attachments/AttachmentSources";
+import { syncWorkCenterComposerHeight } from "./WorkCenterUI";
+import {
+    downloadWorkCenterAttachment,
+    openWorkCenterAttachment
+} from "./WorkCenterAttachmentViewer";
 
-/** Any file — size/type checks happen in attachment ingress, not the picker. */
-const FILE_ACCEPT = "*/*";
 
 const isHttpUrl = (value: string): boolean => {
     try {
@@ -49,31 +53,34 @@ export class WorkCenterEvents {
         if (!this.container) return;
         this.setupFilePicker();
         this.setupComposerInput();
+        this.setupComposerResize();
         this.setupClipboardIngress();
         this.setupDropIngress();
         this.setupRequestOptions();
         this.setupVoiceInput();
         this.setupActions();
+        syncWorkCenterComposerHeight(this.container);
     }
 
     private setupFilePicker(): void {
         if (!this.container) return;
-        const input = document.createElement("input");
-        input.type = "file";
-        input.multiple = true;
-        input.accept = FILE_ACCEPT;
-        input.hidden = true;
-        input.dataset.workcenterFilePicker = "";
-        input.addEventListener("change", async () => {
+        let input = this.container.querySelector("[data-workcenter-file-picker]") as HTMLInputElement | null;
+        if (!input) {
+            input = document.createElement("input");
+            input.type = "file";
+            input.multiple = true;
+            input.className = "wc-file-picker";
+            input.dataset.workcenterFilePicker = "";
+            this.container.append(input);
+        }
+        /* WHY: native <label> + file input keeps the user gesture; programmatic click after an
+         * async picker often never opens a dialog, so nothing appears in the composer. */
+        input.addEventListener("change", () => {
             const files = Array.from(input.files || []);
             input.value = "";
             if (!files.length) return;
-            const added = await this.ingress.addFiles(files);
-            if (!added.length) {
-                this.deps.showMessage?.("Could not attach that file");
-            }
+            void this.attachFiles(files);
         });
-        this.container.append(input);
     }
 
     private setupComposerInput(): void {
@@ -84,6 +91,7 @@ export class WorkCenterEvents {
         input.addEventListener("input", () => {
             this.state.draft.content = input.value;
             this.state.currentPrompt = input.value;
+            syncWorkCenterComposerHeight(this.container);
             this.scheduleDraftPersistence();
         });
         input.addEventListener("keydown", (event) => {
@@ -118,12 +126,12 @@ export class WorkCenterEvents {
 
             if (files.length) {
                 event.preventDefault();
-                void this.ingress.addFiles(files);
+                void this.attachFiles(files);
                 return;
             }
             if (!editable && urls.length) {
                 event.preventDefault();
-                void Promise.all(urls.map((url) => this.ingress.addUrl(url)));
+                void Promise.all(urls.map((url) => this.attachUrl(url)));
                 return;
             }
             if (editable) return;
@@ -137,20 +145,25 @@ export class WorkCenterEvents {
     }
 
     private setupDropIngress(): void {
-        const composer = this.container?.querySelector("[data-workcenter-composer]") as HTMLElement | null;
-        if (!composer) return;
+        const root = this.container;
+        if (!root) return;
+        const composer = root.querySelector("[data-workcenter-composer]") as HTMLElement | null;
 
-        composer.addEventListener("dragover", (event) => {
+        const accept = (event: DragEvent) => {
             event.preventDefault();
-            composer.classList.add("is-dragging");
+            if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+            composer?.classList.add("is-dragging");
+        };
+        root.addEventListener("dragover", accept);
+        root.addEventListener("dragenter", accept);
+        root.addEventListener("dragleave", (event) => {
+            if (event.relatedTarget instanceof Node && root.contains(event.relatedTarget)) return;
+            composer?.classList.remove("is-dragging");
         });
-        composer.addEventListener("dragleave", (event) => {
-            if (event.relatedTarget instanceof Node && composer.contains(event.relatedTarget)) return;
-            composer.classList.remove("is-dragging");
-        });
-        composer.addEventListener("drop", (event) => {
+        root.addEventListener("drop", (event) => {
             event.preventDefault();
-            composer.classList.remove("is-dragging");
+            event.stopPropagation();
+            composer?.classList.remove("is-dragging");
             const data = event.dataTransfer;
             if (!data) return;
             const candidates = collectAttachmentCandidates(data, "drop");
@@ -164,14 +177,14 @@ export class WorkCenterEvents {
                     candidate.kind === "url"
                 )
                 .map((candidate) => candidate.url);
-            if (files.length) void this.ingress.addFiles(files);
-            if (urls.length) void Promise.all(urls.map((url) => this.ingress.addUrl(url)));
+            if (files.length) void this.attachFiles(files);
+            if (urls.length) void Promise.all(urls.map((url) => this.attachUrl(url)));
             if (files.length || urls.length) return;
 
             const text = data.getData("text/plain").trim();
             if (!text) return;
             if (isHttpUrl(text)) {
-                void this.ingress.addUrl(text);
+                void this.attachUrl(text);
                 return;
             }
             this.appendDraftText(text);
@@ -230,7 +243,6 @@ export class WorkCenterEvents {
 
             switch (action) {
                 case "select-files":
-                    (this.container?.querySelector("[data-workcenter-file-picker]") as HTMLInputElement | null)?.click();
                     break;
                 case "new-chat":
                     void this.actions.startNewConversation(this.state);
@@ -244,9 +256,29 @@ export class WorkCenterEvents {
                 case "copy-turn":
                     void this.actions.copyConversationTurn(this.state, actionElement.dataset.turnId || "");
                     break;
+                case "view-attachment":
+                    event.preventDefault();
+                    void this.viewAttachment(actionElement.dataset.attachmentHash || "");
+                    break;
+                case "download-attachment":
+                    event.preventDefault();
+                    event.stopPropagation();
+                    void this.downloadAttachment(actionElement.dataset.attachmentHash || "");
+                    break;
                 case "remove-draft-attachment":
+                    event.preventDefault();
+                    event.stopPropagation();
                     this.ingress.remove(actionElement.dataset.attachmentHash || "");
                     break;
+                case "close-attachment-viewer": {
+                    const viewer = this.container?.querySelector("[data-workcenter-attachment-viewer]");
+                    if (typeof HTMLDialogElement !== "undefined" && viewer instanceof HTMLDialogElement && typeof viewer.close === "function") {
+                        viewer.close();
+                    } else {
+                        viewer?.remove();
+                    }
+                    break;
+                }
                 case "open-request-options":
                     this.togglePanel("[data-workcenter-request-options]", actionElement);
                     void this.templates.fillInstructionSelects(this.container, this.state);
@@ -264,6 +296,96 @@ export class WorkCenterEvents {
                     this.templates.showTemplateEditor(this.state, this.container as HTMLElement);
                     break;
             }
+        });
+    }
+
+    private async attachFiles(files: File[]): Promise<void> {
+        const added = await this.ingress.addFiles(files);
+        if (!added.length) {
+            this.deps.showMessage?.("Could not attach that file");
+        }
+    }
+
+    private async attachUrl(url: string): Promise<void> {
+        await this.ingress.addUrl(url);
+    }
+
+    private setupComposerResize(): void {
+        const handle = this.container?.querySelector("[data-composer-resize]") as HTMLElement | null;
+        const composer = this.container?.querySelector("[data-workcenter-composer]") as HTMLElement | null;
+        if (!handle || !composer) return;
+
+        handle.addEventListener("pointerdown", (event) => {
+            if (event.button !== 0) return;
+            event.preventDefault();
+            handle.setPointerCapture?.(event.pointerId);
+            const startY = event.clientY;
+            const startHeight = composer.getBoundingClientRect().height;
+            const hostHeight = this.container?.getBoundingClientRect().height || startHeight;
+            const limit = Math.max(96, hostHeight * 0.75);
+            const onMove = (move: PointerEvent) => {
+                const next = Math.min(limit, Math.max(72, startHeight + (startY - move.clientY)));
+                composer.style.setProperty("--wc-composer-min", `${next}px`);
+                syncWorkCenterComposerHeight(this.container);
+            };
+            const onUp = () => {
+                handle.removeEventListener("pointermove", onMove);
+                handle.removeEventListener("pointerup", onUp);
+                handle.removeEventListener("pointercancel", onUp);
+            };
+            handle.addEventListener("pointermove", onMove);
+            handle.addEventListener("pointerup", onUp);
+            handle.addEventListener("pointercancel", onUp);
+        });
+    }
+
+    private findAttachment(hash: string): WorkCenterAttachmentRef | null {
+        if (!hash) return null;
+        const draft = this.state.draft.attachments.find((attachment) => attachment.hash === hash);
+        if (draft) return draft;
+        for (const message of this.state.messages) {
+            const found = message.attachments.find((attachment) => attachment.hash === hash);
+            if (found) return found;
+        }
+        return null;
+    }
+
+    private async viewAttachment(hash: string): Promise<void> {
+        const attachment = this.findAttachment(hash);
+        if (!attachment || !this.container) return;
+        const file = attachment.url ? this.ingress.fileFor(attachment) : await this.ingress.resolve(attachment);
+        if (!file && !attachment.url) {
+            this.deps.showMessage?.("Attachment is no longer available");
+            return;
+        }
+        await openWorkCenterAttachment({
+            host: this.container,
+            attachment,
+            file,
+            objectUrl: file ? this.ingress.objectUrlFor(file) : null
+        });
+    }
+
+    private async downloadAttachment(hash: string): Promise<void> {
+        const attachment = this.findAttachment(hash);
+        if (!attachment) return;
+        if (attachment.url && !this.ingress.fileFor(attachment)) {
+            downloadWorkCenterAttachment({
+                name: attachment.name,
+                remoteUrl: attachment.url,
+                objectUrl: null
+            });
+            return;
+        }
+        const file = await this.ingress.resolve(attachment);
+        if (!file) {
+            this.deps.showMessage?.("Attachment is no longer available");
+            return;
+        }
+        downloadWorkCenterAttachment({
+            name: attachment.name,
+            remoteUrl: attachment.url,
+            objectUrl: this.ingress.objectUrlFor(file)
         });
     }
 

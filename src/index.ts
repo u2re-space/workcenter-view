@@ -398,6 +398,8 @@ export class WorkCenterView extends UIElement implements View {
         const promptInput = this.element.querySelector(".prompt-input") as HTMLTextAreaElement | null;
         if (promptInput) {
             promptInput.value = state.currentPrompt || "";
+            //promptInput.style.minBlockSize = "stretch";
+            //promptInput.style.minBlockSize = `${Math.max(promptInput.scrollHeight, 1)}px`;
         }
     }
 

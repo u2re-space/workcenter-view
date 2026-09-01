@@ -157,3 +157,47 @@ test("plain-text drop persists the appended composer draft immediately", async (
     assert.equal(state.draft.content, "First line\nDropped line");
     assert.equal(persisted, 1);
 });
+
+test("draft attachment remove action deletes that file from ingress", () => {
+    const attachment = {
+        hash: "note-hash",
+        path: "/user/workcenter/blobs/note-hash",
+        name: "note.txt",
+        type: "text/plain",
+        size: 12,
+        lastModified: 1
+    };
+    const root = createWorkCenterChatShell({
+        title: "AI Work Center",
+        draft: { content: "", attachments: [attachment] },
+        messages: []
+    });
+    const removed: string[] = [];
+    const events = new WorkCenterEvents(
+        { showMessage: () => undefined, render: () => undefined } as any,
+        { persistDraft: async () => undefined, executeUnifiedAction: async () => undefined } as any,
+        {} as any,
+        {} as any,
+        {} as any,
+        {
+            addFiles: async () => [],
+            addUrl: async () => null,
+            remove: (hash: string) => {
+                removed.push(hash);
+            }
+        } as any,
+        {
+            draft: { content: "", attachments: [attachment] },
+            files: [],
+            messages: [],
+            currentPrompt: ""
+        } as any
+    );
+    events.setContainer(root);
+    events.setupWorkCenterEvents();
+
+    const remove = root.querySelector('[data-action="remove-draft-attachment"]') as HTMLButtonElement;
+    remove.dispatchEvent(new Event("click", { bubbles: true }));
+
+    assert.deepEqual(removed, ["note-hash"]);
+});

@@ -57,18 +57,80 @@ const formatFileSize = (bytes: number): string => {
     return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 };
 
+const formatAttachCount = (count: number): string =>
+    count === 1 ? "1 file" : `${count} files`;
+
+const attachmentGlyph = (attachment: WorkCenterAttachmentRef): string => {
+    if (attachment.url) return "link";
+    const type = attachment.type.toLowerCase();
+    const name = attachment.name.toLowerCase();
+    if (type.startsWith("image/")) return "image";
+    if (type === "application/pdf" || name.endsWith(".pdf")) return "file-pdf";
+    if (type.includes("wordprocessingml") || name.endsWith(".docx") || name.endsWith(".doc")) return "file-doc";
+    if (type.includes("spreadsheetml") || name.endsWith(".xlsx") || name.endsWith(".xls")) return "file-xls";
+    if (type.startsWith("text/") || name.endsWith(".md") || name.endsWith(".txt") || name.endsWith(".csv")) {
+        return "file-text";
+    }
+    return "paperclip";
+};
+
+/** Grow the composer textarea with its text; a dragged min-height can still expand further. */
+export const syncWorkCenterComposerHeight = (root: ParentNode | null): void => {
+    const input = root?.querySelector<HTMLTextAreaElement>(".prompt-input");
+    if (!input) return;
+    //input.style.blockSize = "auto";
+    //input.style.blockSize = `${Math.max(input.scrollHeight, 1)}px`;
+};
+
+/** After attachments land, grow the composer (and a floating window) so the rail is not clipped. */
+export const syncWorkCenterChatForAttachments = (root: ParentNode | null): void => {
+    syncWorkCenterComposerHeight(root);
+    const composer = root?.querySelector<HTMLElement>("[data-workcenter-composer]");
+    if (!composer) return;
+    const rail = composer.querySelector<HTMLElement>("[data-draft-files]");
+    const hasFiles = Boolean(rail && !rail.hidden);
+    composer.classList.toggle("has-attachments", hasFiles);
+    if (!hasFiles) {
+        composer.style.removeProperty("--wc-composer-min");
+        return;
+    }
+    const chat = (root instanceof HTMLElement ? root : composer.closest(".workcenter-chat")) as HTMLElement | null;
+    const needed = Math.max(composer.scrollHeight, composer.offsetHeight, 200);
+    const cap = chat ? Math.max(200, chat.clientHeight * 0.75 || 540) : 540;
+    composer.style.setProperty("--wc-composer-min", `${Math.min(needed, cap)}px`);
+
+    const extra = rail?.getBoundingClientRect().height || 0;
+    const frame = chat?.closest("ui-window");
+    if (!(frame instanceof HTMLElement) || extra <= 0) return;
+    const rect = frame.getBoundingClientRect();
+    const next = Math.min((globalThis.innerHeight || rect.height) * 0.92, rect.height + extra);
+    if (next > rect.height + 4) {
+        frame.style.blockSize = `${Math.round(next)}px`;
+    }
+};
+
 const appendAttachmentCard = (
     target: HTMLElement,
     attachment: WorkCenterAttachmentRef,
     presentation?: WorkCenterAttachmentPresentation,
     removable = false
 ): void => {
-    const card = document.createElement("div");
-    card.className = "wc-attachment-chip";
+    const card = document.createElement("article");
+    const isImage = attachment.type.startsWith("image/");
+    card.className = `wc-attachment-chip${isImage ? " is-image" : ""}`;
     card.dataset.attachmentHash = attachment.hash;
 
     const file = presentation?.fileFor(attachment) ?? null;
     const preview = file ? presentation?.getPreviewUrl(file) : null;
+
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "wc-attachment-chip__open";
+    open.dataset.action = "view-attachment";
+    open.dataset.attachmentHash = attachment.hash;
+    open.setAttribute("aria-label", `View ${attachment.name}`);
+    open.title = `View ${attachment.name}`;
+
     if (preview) {
         const image = document.createElement("img");
         image.className = "wc-attachment-chip__preview";
@@ -76,32 +138,36 @@ const appendAttachmentCard = (
         image.alt = "";
         image.decoding = "async";
         image.loading = "lazy";
-        card.append(image);
+        open.append(image);
     } else {
-        card.append(icon(attachment.url ? "link" : "paperclip", "16"));
+        const glyph = icon(attachmentGlyph(attachment), "20");
+        glyph.classList.add("wc-attachment-chip__glyph");
+        open.append(glyph);
     }
 
-    const label = document.createElement(attachment.url ? "a" : "span");
+    const copy = document.createElement("span");
+    copy.className = "wc-attachment-chip__copy";
+    const label = document.createElement("span");
     label.className = "wc-attachment-chip__label";
     label.textContent = attachment.url || attachment.name;
-    if (attachment.url) {
-        const link = label as HTMLAnchorElement;
-        link.href = attachment.url;
-        link.target = "_blank";
-        link.rel = "noreferrer";
-    }
-    card.append(label);
-
     const meta = document.createElement("span");
     meta.className = "wc-attachment-chip__meta";
     meta.textContent = attachment.error || formatFileSize(attachment.size);
-    card.append(meta);
+    copy.append(label, meta);
+    open.append(copy);
+    card.append(open);
 
+    const actions = document.createElement("div");
+    actions.className = "wc-attachment-chip__actions";
+    const download = button("download-attachment", `Download ${attachment.name}`, "download", "wc-chip-remove");
+    download.dataset.attachmentHash = attachment.hash;
+    actions.append(download);
     if (removable) {
-        const remove = button("remove-draft-attachment", `Remove ${attachment.name}`, "x", "wc-chip-remove");
+        const remove = button("remove-draft-attachment", `Remove ${attachment.name}`, "trash", "wc-chip-remove");
         remove.dataset.attachmentHash = attachment.hash;
-        card.append(remove);
+        actions.append(remove);
     }
+    card.append(actions);
     target.append(card);
 };
 
@@ -298,13 +364,32 @@ export const createWorkCenterChatShell = (options: WorkCenterChatShellOptions): 
     composer.className = "workcenter-composer";
     composer.dataset.workcenterComposer = "";
     composer.setAttribute("aria-label", "Message composer");
+    const resize = document.createElement("div");
+    resize.className = "workcenter-composer__resize";
+    resize.dataset.composerResize = "";
+    resize.setAttribute("role", "separator");
+    resize.setAttribute("aria-orientation", "horizontal");
+    resize.setAttribute("aria-label", "Resize composer");
+    resize.title = "Drag to stretch the composer";
+    composer.append(resize);
+    const fileRail = document.createElement("div");
+    fileRail.className = "workcenter-composer__files";
+    fileRail.dataset.draftFiles = "";
+    fileRail.hidden = options.draft.attachments.length === 0;
+    const fileHead = document.createElement("div");
+    fileHead.className = "workcenter-composer__files-head";
+    const fileLabel = document.createElement("span");
+    fileLabel.dataset.attachLabel = "";
+    fileLabel.textContent = formatAttachCount(options.draft.attachments.length);
+    fileHead.append(fileLabel);
     const chips = document.createElement("div");
     chips.className = "workcenter-composer__attachments";
     chips.dataset.draftAttachments = "";
     for (const attachment of options.draft.attachments) {
         appendAttachmentCard(chips, attachment, options.attachments, true);
     }
-    composer.append(chips);
+    fileRail.append(fileHead, chips);
+    composer.append(fileRail);
 
     const inputRow = document.createElement("div");
     inputRow.className = "workcenter-composer__input-row";
@@ -312,11 +397,30 @@ export const createWorkCenterChatShell = (options: WorkCenterChatShellOptions): 
     prompt.className = "prompt-input";
     prompt.name = "prompt";
     prompt.rows = 1;
+    prompt.dataset.composerAutogrow = "";
     prompt.placeholder = "Message Work Center…";
     prompt.value = options.draft.content;
     prompt.setAttribute("aria-label", "Message Work Center");
     inputRow.append(prompt);
-    inputRow.append(button("select-files", "Attach files", "paperclip"));
+    const attach = document.createElement("label");
+    attach.className = "wc-icon-button wc-attach-button";
+    attach.dataset.action = "select-files";
+    attach.setAttribute("aria-label", options.draft.attachments.length
+        ? `Attach files, ${formatAttachCount(options.draft.attachments.length)} attached`
+        : "Attach files");
+    attach.title = "Attach files";
+    const picker = document.createElement("input");
+    picker.type = "file";
+    picker.multiple = true;
+    picker.className = "wc-file-picker";
+    picker.dataset.workcenterFilePicker = "";
+    const badge = document.createElement("span");
+    badge.className = "wc-attach-count";
+    badge.dataset.attachCount = "";
+    badge.textContent = String(options.draft.attachments.length);
+    badge.hidden = options.draft.attachments.length === 0;
+    attach.append(picker, icon("paperclip"), badge);
+    inputRow.append(attach);
     inputRow.append(button("voice-input", "Voice input", "microphone"));
     const send = button("execute", "Send message", "arrow-up", "wc-send-button");
     send.type = "submit";
@@ -371,13 +475,29 @@ export class WorkCenterUI {
         return container;
     }
 
-    updateFileCounter(state: WorkCenterState): void {
-        const attachments = this.container?.querySelector("[data-draft-attachments]") as HTMLElement | null;
+    updateFileCounter(state: WorkCenterState, root: ParentNode | null = this.container): void {
+        const count = state.draft.attachments.length;
+        const rail = root?.querySelector("[data-draft-files]") as HTMLElement | null;
+        if (rail) rail.hidden = count === 0;
+        const label = root?.querySelector("[data-attach-label]");
+        if (label) label.textContent = formatAttachCount(count);
+        const badge = root?.querySelector("[data-attach-count]") as HTMLElement | null;
+        if (badge) {
+            badge.textContent = String(count);
+            badge.hidden = count === 0;
+        }
+        const attach = root?.querySelector("[data-action='select-files']");
+        attach?.setAttribute(
+            "aria-label",
+            count ? `Attach files, ${formatAttachCount(count)} attached` : "Attach files"
+        );
+        const attachments = root?.querySelector("[data-draft-attachments]") as HTMLElement | null;
         if (!attachments) return;
         attachments.replaceChildren();
         for (const attachment of state.draft.attachments) {
             appendAttachmentCard(attachments, attachment, this.presentation, true);
         }
+        syncWorkCenterChatForAttachments(root);
     }
 
     updateFileList(state: WorkCenterState): void {
@@ -387,6 +507,7 @@ export class WorkCenterUI {
     updatePromptInput(state: WorkCenterState): void {
         const input = this.container?.querySelector(".prompt-input") as HTMLTextAreaElement | null;
         if (input) input.value = state.draft.content;
+        syncWorkCenterComposerHeight(this.container);
     }
 
     updateTemplateSelect(_state: WorkCenterState): void {}

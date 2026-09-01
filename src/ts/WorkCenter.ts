@@ -136,14 +136,8 @@ export class WorkCenterManager {
                     this.deps.showMessage("Unable to save the attachment draft");
                 });
                 this.deps.onFilesChanged?.();
-                const host = this.ui?.getContainer();
-                // WHY: full remount often targets a detached GLit/shell node — chips never appear.
-                if (host?.isConnected) {
-                    this.ui.updateFileCounter(this.state);
-                    this.ui.updatePromptInput(this.state);
-                } else {
-                    this.deps.render?.();
-                }
+                this.paintDraftAttachments();
+                this.deps.render?.();
             },
             onRejected: (reason) => this.deps.showMessage(reason)
         });
@@ -233,7 +227,14 @@ export class WorkCenterManager {
                 snapshot.draft.attachments.length > 0;
 
             if (hasPersistedContent) {
-                this.state.files = await this.attachmentIngress.hydrate(snapshot.draft.attachments);
+                const refs = [
+                    ...snapshot.draft.attachments,
+                    ...snapshot.messages.flatMap((message) => message.attachments)
+                ];
+                await this.attachmentIngress.hydrate(refs);
+                this.state.files = snapshot.draft.attachments
+                    .map((ref) => this.attachmentIngress.fileFor(ref))
+                    .filter((file): file is File => file !== null);
             } else if (this.state.draft.content) {
                 // COMPAT: Preserve a legacy unsent localStorage prompt the first
                 // time this version starts, then keep future drafts in OPFS.
@@ -241,12 +242,31 @@ export class WorkCenterManager {
                 await this.session.persistDraft();
             }
             this.syncStateFromSession(false);
+            this.session.setDraft(this.state.draft);
         } catch (error) {
             console.warn("[WorkCenter] Failed to hydrate local session:", error);
             this.state.sessionHydrated = true;
         } finally {
             this.deps.render?.();
         }
+    }
+
+    /** Paint chips on every live chat root — GLit/shell remounts can leave a detached SoT node. */
+    private paintDraftAttachments(): void {
+        const hosts = new Set<ParentNode>();
+        const current = this.ui?.getContainer();
+        if (current) hosts.add(current);
+        if (typeof document !== "undefined") {
+            document.querySelectorAll(".workcenter-chat").forEach((node) => hosts.add(node));
+        }
+        let painted = false;
+        for (const host of hosts) {
+            if (!host.querySelector("[data-draft-attachments]")) continue;
+            this.ui.updateFileCounter(this.state, host);
+            painted = true;
+        }
+        if (current?.isConnected) this.ui.updatePromptInput(this.state);
+        if (!painted) this.deps.render?.();
     }
 
     private syncStateFromSession(render = true): void {
