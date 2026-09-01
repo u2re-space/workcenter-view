@@ -99,6 +99,11 @@ import {
 } from "./WorkCenterSessionPersistence";
 import { WorkCenterDocumentPreparer } from "./WorkCenterDocumentPreparation";
 import { takeHeldIngressFiles } from "com/routing/channel/sku-ingress";
+import { bindWorkCenterCommandBus } from "./WorkCenterCommandBus";
+import {
+    isWorkCenterCommandEnvelope,
+    type WorkCenterCommand
+} from "./WorkCenterCommands";
 
 export class WorkCenterManager {
     private state: WorkCenterState;
@@ -122,6 +127,7 @@ export class WorkCenterManager {
     private documentPreparer: WorkCenterDocumentPreparer;
     private sessionReady: Promise<void>;
     private processedMessageIds = new Set<string>();
+    private unbindCommandBus: () => void = () => {};
 
     constructor(dependencies: WorkCenterDependencies) {
         this.deps = dependencies;
@@ -192,6 +198,8 @@ export class WorkCenterManager {
             this.attachmentIngress,
             this.state
         );
+
+        this.unbindCommandBus = bindWorkCenterCommandBus((command) => this.dispatchCommand(command));
 
         // Initialize share target result listener
         this.shareTarget.initShareTargetListener(this.state);
@@ -341,6 +349,48 @@ export class WorkCenterManager {
         this.deps.render?.();
     }
 
+    async dispatchCommand(command: WorkCenterCommand): Promise<void> {
+        await this.sessionReady;
+        switch (command.type) {
+            case "hydrate":
+                await this.hydrateSession();
+                return;
+            case "snapshot":
+                return;
+            case "draft.set":
+                this.session.setDraft(command.draft);
+                this.state.draft = command.draft;
+                this.state.currentPrompt = command.draft.content;
+                this.paintLiveConversation("if-idle");
+                return;
+            case "draft.commit":
+            case "turn.execute":
+                await this.actions.executeUnifiedAction(this.state);
+                return;
+            case "attach.add":
+                if (command.files?.length) await this.addFiles(command.files);
+                return;
+            case "attach.remove": {
+                const next = (this.state.draft.attachments || []).filter((item) => item.hash !== command.hash);
+                this.state.draft.attachments = next;
+                this.session.setDraft(this.state.draft);
+                this.paintLiveConversation("if-idle");
+                return;
+            }
+            case "turn.cancel":
+                await this.actions.cancelConversationTurn(this.state, command.assistantId);
+                return;
+            case "turn.retry":
+                await this.actions.retryConversationTurn(this.state, command.assistantId);
+                return;
+            case "ingress.apply":
+                await this.handleExternalMessage(command.payload);
+                return;
+            default:
+                return;
+        }
+    }
+
     /** Normalize all channel/share payloads into the active conversation draft. */
     private async handleIncomingContent(data: any, contentType: string): Promise<void> {
         await this.sessionReady;
@@ -409,6 +459,10 @@ export class WorkCenterManager {
      */
     async handleExternalMessage(message: any): Promise<void> {
         if (!message) return;
+        if (isWorkCenterCommandEnvelope(message)) {
+            await this.dispatchCommand(message.command);
+            return;
+        }
         await this.sessionReady;
         const messageId = typeof message?.id === "string" ? message.id : "";
         if (messageId) {
@@ -468,6 +522,7 @@ export class WorkCenterManager {
     }
 
     destroy(): void {
+        this.unbindCommandBus();
         // Clear container references
         this.ui.setContainer(null);
         this.attachments.setContainer(null);

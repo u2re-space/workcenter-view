@@ -19,7 +19,8 @@ const testEntries = {
     "workcenter-session.test": resolve(root, "test/workcenter-session.test.ts"),
     "workcenter-turn.test": resolve(root, "test/workcenter-turn.test.ts"),
     "workcenter-events.test": resolve(root, "test/workcenter-events.test.ts"),
-    "workcenter-ui.test": resolve(root, "test/workcenter-ui.test.ts")
+    "workcenter-ui.test": resolve(root, "test/workcenter-ui.test.ts"),
+    "workcenter-commands.test": resolve(root, "test/workcenter-commands.test.ts")
 };
 
 const requested = new Set(process.argv.slice(2));
