@@ -475,6 +475,35 @@ export class WorkCenterUI {
         return container;
     }
 
+    /** Rebuild transcript + draft chips on an already-mounted chat root. */
+    paintConversation(
+        state: WorkCenterState,
+        root: ParentNode | null = this.container,
+        syncPrompt: "replace" | "if-idle" = "replace"
+    ): void {
+        const transcript = root?.querySelector("[data-workcenter-transcript]") as HTMLElement | null;
+        if (transcript) {
+            transcript.replaceChildren();
+            if (!state.messages.length) {
+                const empty = document.createElement("p");
+                empty.className = "workcenter-transcript__empty";
+                empty.textContent = "Start with a question or attach something to review.";
+                transcript.append(empty);
+            } else {
+                for (const message of state.messages) {
+                    appendMessage(transcript, message, this.presentation);
+                }
+            }
+            transcript.scrollTop = transcript.scrollHeight;
+        }
+        this.updateFileCounter(state, root);
+        const input = root?.querySelector(".prompt-input") as HTMLTextAreaElement | null;
+        if (input && (syncPrompt === "replace" || input !== document.activeElement)) {
+            input.value = state.draft.content;
+        }
+        syncWorkCenterComposerHeight(root);
+    }
+
     updateFileCounter(state: WorkCenterState, root: ParentNode | null = this.container): void {
         const count = state.draft.attachments.length;
         const rail = root?.querySelector("[data-draft-files]") as HTMLElement | null;

@@ -52,6 +52,34 @@ test("submit captures an immutable user draft before it is cleared", async () =>
     assert.equal(persistence.saved?.messages[0]?.content, "Summarize this image");
 });
 
+test("commitDraft accepts a turn without waiting for persistence", async () => {
+    let release!: () => void;
+    const hang = new Promise<void>((resolve) => {
+        release = resolve;
+    });
+    const persistence = {
+        saved: null as WorkCenterSessionSnapshot | null,
+        async load() {
+            return this.saved;
+        },
+        async save(snapshot: WorkCenterSessionSnapshot) {
+            await hang;
+            this.saved = structuredClone(snapshot);
+        },
+        async clear() {
+            this.saved = null;
+        }
+    };
+    const session = new WorkCenterSession(persistence);
+    await session.hydrate();
+    session.setDraft({ content: "Describe this image", attachments: [] });
+    const submitted = session.commitDraft({ outputFormat: "markdown" });
+    assert.equal(submitted.user.content, "Describe this image");
+    assert.equal(session.snapshot().messages.length, 2);
+    assert.equal(persistence.saved, null);
+    release();
+});
+
 test("hydrate restores a persisted transcript and new chat clears it", async () => {
     const persistence = createMemoryPersistence();
     const original = new WorkCenterSession(persistence);

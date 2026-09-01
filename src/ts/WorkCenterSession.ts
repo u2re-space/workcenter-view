@@ -126,10 +126,14 @@ export class WorkCenterSession {
         await this.persist();
     }
 
-    async submitDraft(request: WorkCenterRequestOptions): Promise<{
+    /**
+     * Move the live draft into a user/assistant pair without waiting on OPFS.
+     * WHY: A hung attachment `put` must not block the transcript from accepting Send/Enter.
+     */
+    commitDraft(request: WorkCenterRequestOptions): {
         user: WorkCenterMessage;
         assistant: WorkCenterMessage;
-    }> {
+    } {
         const now = Date.now();
         const user: WorkCenterMessage = {
             id: createId("user"),
@@ -153,8 +157,16 @@ export class WorkCenterSession {
 
         this.state.messages.push(user, assistant);
         this.state.draft = { content: "", attachments: [] };
-        await this.persist();
         return { user: cloneMessage(user), assistant: cloneMessage(assistant) };
+    }
+
+    async submitDraft(request: WorkCenterRequestOptions): Promise<{
+        user: WorkCenterMessage;
+        assistant: WorkCenterMessage;
+    }> {
+        const submitted = this.commitDraft(request);
+        await this.persist();
+        return submitted;
     }
 
     async completeAssistant(id: string, completion: AssistantCompletion): Promise<WorkCenterMessage | null> {

@@ -75,6 +75,10 @@
             background: var(--color-primary-hover);
             color: var(--color-on-primary);
         }
+
+        ui-icon {
+            pointer-events: none;
+        }
     }
 
     .workcenter-transcript {

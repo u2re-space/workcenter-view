@@ -159,6 +159,17 @@ export class WorkCenterView extends UIElement implements View {
         /* WHY: Window-frame path never connects `cw-workcenter-view`, so `onInitialize`/`onMount` run only after this subtree exists unless we load early. */
         this.leaseWorkCenterDocumentStyles();
 
+        const live = this.connectedChat() ?? this.element;
+        if (live?.querySelector("[data-workcenter-composer]")) {
+            this.element = live;
+            this.manager.adoptLiveRoot(live);
+            if (live.isConnected) this.manager.paintLiveConversation();
+            this.syncPromptInputFromState();
+            this.setupProcessResultObserver();
+            this.emitFilesChanged();
+            return live;
+        }
+
         this.element = this.manager.renderWorkCenterView();
         this.syncPromptInputFromState();
         this.setupProcessResultObserver();
@@ -429,13 +440,27 @@ export class WorkCenterView extends UIElement implements View {
         this.options.onFilesChange?.([...files]);
     }
 
+    private connectedChat(): HTMLElement | null {
+        if (this.element?.isConnected) return this.element;
+        if (typeof document === "undefined") return null;
+        return document.querySelector<HTMLElement>(".workcenter-chat[data-view='workcenter']");
+    }
+
     private requestRender(): void {
         if (!this.manager) return;
+        const live = this.connectedChat();
+        if (live?.querySelector("[data-workcenter-composer]")) {
+            this.pendingRenderAfterMount = false;
+            this.element = live;
+            this.manager.adoptLiveRoot(live);
+            this.manager.paintLiveConversation();
+            this.syncPromptInputFromState();
+            this.setupProcessResultObserver();
+            return;
+        }
         let currentElement = this.element;
         if (!currentElement?.parentElement) {
-            const connected = typeof document !== "undefined"
-                ? document.querySelector<HTMLElement>(".workcenter-chat[data-view='workcenter']")
-                : null;
+            const connected = live;
             if (connected?.parentElement) {
                 currentElement = connected;
                 this.element = connected;

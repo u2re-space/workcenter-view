@@ -268,23 +268,32 @@ export class WorkCenterActions {
     private async executeConversationTurn(state: WorkCenterState): Promise<void> {
         const conversation = this.conversation;
         if (!conversation) return;
-        if (this.activeTurns.size > 0) {
-            this.deps.showMessage("Wait for the current response before sending another message");
-            return;
-        }
-        if (!state.draft.content.trim() && state.draft.attachments.length === 0) {
-            this.deps.showMessage("Enter a prompt or attach a file first");
-            return;
-        }
+        try {
+            if (this.activeTurns.size > 0) {
+                this.deps.showMessage("Wait for the current response before sending another message");
+                return;
+            }
+            if (!state.draft.content.trim() && state.draft.attachments.length === 0) {
+                this.deps.showMessage("Enter a prompt or attach a file first");
+                return;
+            }
 
-        await this.persistDraft(state);
-        const submitted = await conversation.session.submitDraft(this.requestOptions(state));
-        state.files = [];
-        this.syncConversationState(state);
+            conversation.session.setDraft(state.draft);
+            const submitted = conversation.session.commitDraft(this.requestOptions(state));
+            state.files = [];
+            this.syncConversationState(state);
+            void conversation.session.persistDraft().catch(() => {
+                this.deps.showMessage("Unable to save this chat locally");
+            });
 
-        const controller = new AbortController();
-        this.activeTurns.set(submitted.assistant.id, controller);
-        await this.runConversationTurn(state, submitted.user, submitted.assistant, controller);
+            const controller = new AbortController();
+            this.activeTurns.set(submitted.assistant.id, controller);
+            await this.runConversationTurn(state, submitted.user, submitted.assistant, controller);
+        } catch (error) {
+            this.deps.showMessage(
+                error instanceof Error ? error.message : "Unable to send the message"
+            );
+        }
     }
 
     async retryConversationTurn(state: WorkCenterState, assistantId: string): Promise<void> {

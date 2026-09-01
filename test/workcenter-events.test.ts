@@ -158,6 +158,57 @@ test("plain-text drop persists the appended composer draft immediately", async (
     assert.equal(persisted, 1);
 });
 
+test("Enter and the send button submit the visible composer draft", () => {
+    const root = createWorkCenterChatShell({
+        title: "AI Work Center",
+        draft: { content: "", attachments: [] },
+        messages: []
+    });
+    const state = {
+        draft: { content: "", attachments: [] },
+        files: [],
+        currentPrompt: "",
+        messages: [],
+        outputFormat: "auto",
+        selectedLanguage: "auto",
+        recognitionFormat: "auto",
+        processingFormat: "markdown"
+    } as any;
+    let sent = 0;
+    const events = new WorkCenterEvents(
+        { showMessage: () => undefined, render: () => undefined } as any,
+        {
+            persistDraft: async () => undefined,
+            executeUnifiedAction: async () => {
+                sent += 1;
+            }
+        } as any,
+        {} as any,
+        {} as any,
+        {} as any,
+        { addFiles: async () => [], addUrl: async () => null, remove: () => undefined } as any,
+        state
+    );
+    events.setContainer(root);
+    events.setupWorkCenterEvents();
+
+    const textarea = root.querySelector(".prompt-input") as HTMLTextAreaElement;
+    textarea.value = "Describe this image";
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+
+    const enter = new Event("keydown", { bubbles: true, cancelable: true });
+    Object.defineProperty(enter, "key", { value: "Enter" });
+    Object.defineProperty(enter, "shiftKey", { value: false });
+    Object.defineProperty(enter, "isComposing", { value: false });
+    textarea.dispatchEvent(enter);
+    assert.equal(enter.defaultPrevented, true);
+    assert.equal(sent, 1);
+    assert.equal(state.draft.content, "Describe this image");
+
+    root.querySelector('[data-action="execute"]')?.dispatchEvent(new Event("click", { bubbles: true }));
+    assert.equal(sent, 2);
+});
+
 test("draft attachment remove action deletes that file from ingress", () => {
     const attachment = {
         hash: "note-hash",

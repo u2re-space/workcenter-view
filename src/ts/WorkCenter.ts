@@ -136,8 +136,7 @@ export class WorkCenterManager {
                     this.deps.showMessage("Unable to save the attachment draft");
                 });
                 this.deps.onFilesChanged?.();
-                this.paintDraftAttachments();
-                this.deps.render?.();
+                this.paintLiveConversation("if-idle");
             },
             onRejected: (reason) => this.deps.showMessage(reason)
         });
@@ -247,26 +246,43 @@ export class WorkCenterManager {
             console.warn("[WorkCenter] Failed to hydrate local session:", error);
             this.state.sessionHydrated = true;
         } finally {
-            this.deps.render?.();
+            this.paintLiveConversation();
         }
     }
 
-    /** Paint chips on every live chat root — GLit/shell remounts can leave a detached SoT node. */
-    private paintDraftAttachments(): void {
+    /** Prefer a connected chat root so GLit remounts do not steal the live composer. */
+    adoptLiveRoot(root: HTMLElement): void {
+        this.ui.setContainer(root);
+        this.events.setContainer(root);
+        this.events.bindLiveChats();
+    }
+
+    /** Paint transcript + draft on every live chat root and bind Send/Enter there. */
+    paintLiveConversation(syncPrompt: "replace" | "if-idle" = "replace"): void {
+        const hosts = this.liveChatHosts();
+        let painted = false;
+        for (const host of hosts) {
+            if (!host.querySelector("[data-workcenter-transcript]")) continue;
+            this.ui.paintConversation(this.state, host, syncPrompt);
+            painted = true;
+        }
+        this.events.bindLiveChats();
+        if (!painted) this.deps.render?.();
+    }
+
+    private liveChatHosts(): Set<ParentNode> {
         const hosts = new Set<ParentNode>();
         const current = this.ui?.getContainer();
         if (current) hosts.add(current);
         if (typeof document !== "undefined") {
             document.querySelectorAll(".workcenter-chat").forEach((node) => hosts.add(node));
         }
-        let painted = false;
-        for (const host of hosts) {
-            if (!host.querySelector("[data-draft-attachments]")) continue;
-            this.ui.updateFileCounter(this.state, host);
-            painted = true;
-        }
-        if (current?.isConnected) this.ui.updatePromptInput(this.state);
-        if (!painted) this.deps.render?.();
+        return hosts;
+    }
+
+    /** Paint chips on every live chat root — GLit/shell remounts can leave a detached SoT node. */
+    private paintDraftAttachments(): void {
+        this.paintLiveConversation();
     }
 
     private syncStateFromSession(render = true): void {
@@ -283,7 +299,7 @@ export class WorkCenterManager {
         this.state.sessionEpoch = snapshot.epoch;
         this.state.sessionHydrated = true;
         this.deps.onFilesChanged?.();
-        if (render) this.deps.render?.();
+        if (render) this.paintLiveConversation();
     }
 
     async addFiles(files: File[]): Promise<void> {

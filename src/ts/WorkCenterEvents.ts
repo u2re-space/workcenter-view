@@ -50,28 +50,66 @@ export class WorkCenterEvents {
     }
 
     setupWorkCenterEvents(): void {
-        if (!this.container) return;
-        this.setupFilePicker();
-        this.setupComposerInput();
-        this.setupComposerResize();
-        this.setupClipboardIngress();
-        this.setupDropIngress();
-        this.setupRequestOptions();
-        this.setupVoiceInput();
-        this.setupActions();
-        syncWorkCenterComposerHeight(this.container);
+        this.bindLiveChats();
     }
 
-    private setupFilePicker(): void {
-        if (!this.container) return;
-        let input = this.container.querySelector("[data-workcenter-file-picker]") as HTMLInputElement | null;
+    /** Bind Send/Enter/drop on every mounted chat, including a visible clone GLit left behind. */
+    bindLiveChats(): void {
+        for (const root of this.liveRoots()) this.bindRoot(root);
+    }
+
+    private liveRoots(): HTMLElement[] {
+        const roots = new Set<HTMLElement>();
+        if (this.container) roots.add(this.container);
+        if (typeof document !== "undefined") {
+            document.querySelectorAll<HTMLElement>(".workcenter-chat").forEach((node) => {
+                if (node.isConnected || node === this.container) roots.add(node);
+            });
+        }
+        return [...roots];
+    }
+
+    private bindRoot(root: HTMLElement): void {
+        if (root.dataset.wcEventsBound === "1") return;
+        root.dataset.wcEventsBound = "1";
+        this.setupFilePicker(root);
+        this.setupComposerInput(root);
+        this.setupComposerResize(root);
+        this.setupClipboardIngress(root);
+        this.setupDropIngress(root);
+        this.setupRequestOptions(root);
+        this.setupVoiceInput(root);
+        this.setupActions(root);
+        syncWorkCenterComposerHeight(root);
+    }
+
+    private sendComposer(root?: HTMLElement): void {
+        this.syncDraftFromComposer(root);
+        void this.actions.executeUnifiedAction(this.state);
+    }
+
+    private syncDraftFromComposer(preferred?: HTMLElement): void {
+        const roots = preferred ? [preferred, ...this.liveRoots()] : this.liveRoots();
+        for (const root of roots) {
+            const input = root.querySelector(".prompt-input") as HTMLTextAreaElement | null;
+            if (!input) continue;
+            if (!root.isConnected && root !== preferred && root !== this.container) continue;
+            this.state.draft.content = input.value;
+            this.state.currentPrompt = input.value;
+            if (root.isConnected) break;
+        }
+    }
+
+    private setupFilePicker(root: HTMLElement = this.container!): void {
+        if (!root) return;
+        let input = root.querySelector("[data-workcenter-file-picker]") as HTMLInputElement | null;
         if (!input) {
             input = document.createElement("input");
             input.type = "file";
             input.multiple = true;
             input.className = "wc-file-picker";
             input.dataset.workcenterFilePicker = "";
-            this.container.append(input);
+            root.append(input);
         }
         /* WHY: native <label> + file input keeps the user gesture; programmatic click after an
          * async picker often never opens a dialog, so nothing appears in the composer. */
@@ -83,31 +121,31 @@ export class WorkCenterEvents {
         });
     }
 
-    private setupComposerInput(): void {
-        const input = this.container?.querySelector(".prompt-input") as HTMLTextAreaElement | null;
-        const composer = this.container?.querySelector("[data-workcenter-composer]") as HTMLFormElement | null;
+    private setupComposerInput(root: HTMLElement): void {
+        const input = root.querySelector(".prompt-input") as HTMLTextAreaElement | null;
+        const composer = root.querySelector("[data-workcenter-composer]") as HTMLFormElement | null;
         if (!input || !composer) return;
 
         input.addEventListener("input", () => {
             this.state.draft.content = input.value;
             this.state.currentPrompt = input.value;
-            syncWorkCenterComposerHeight(this.container);
+            syncWorkCenterComposerHeight(root);
             this.scheduleDraftPersistence();
         });
         input.addEventListener("keydown", (event) => {
             if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
                 event.preventDefault();
-                void this.actions.executeUnifiedAction(this.state);
+                this.sendComposer(root);
             }
         });
         composer.addEventListener("submit", (event) => {
             event.preventDefault();
-            void this.actions.executeUnifiedAction(this.state);
+            this.sendComposer(root);
         });
     }
 
-    private setupClipboardIngress(): void {
-        this.container?.addEventListener("paste", (event) => {
+    private setupClipboardIngress(root: HTMLElement): void {
+        root.addEventListener("paste", (event) => {
             const data = event.clipboardData;
             if (!data) return;
             const target = event.target as HTMLElement | null;
@@ -144,9 +182,7 @@ export class WorkCenterEvents {
         });
     }
 
-    private setupDropIngress(): void {
-        const root = this.container;
-        if (!root) return;
+    private setupDropIngress(root: HTMLElement): void {
         const composer = root.querySelector("[data-workcenter-composer]") as HTMLElement | null;
 
         const accept = (event: DragEvent) => {
@@ -191,7 +227,7 @@ export class WorkCenterEvents {
         });
     }
 
-    private setupRequestOptions(): void {
+    private setupRequestOptions(root: HTMLElement): void {
         const selectBindings: Array<[string, keyof WorkCenterState]> = [
             [".format-select", "outputFormat"],
             [".language-select", "selectedLanguage"],
@@ -199,14 +235,14 @@ export class WorkCenterEvents {
             [".processing-select", "processingFormat"]
         ];
         for (const [selector, property] of selectBindings) {
-            const select = this.container?.querySelector(selector) as HTMLSelectElement | null;
+            const select = root.querySelector(selector) as HTMLSelectElement | null;
             select?.addEventListener("change", () => {
                 (this.state[property] as string) = select.value;
                 WorkCenterStateManager.saveState(this.state);
             });
         }
 
-        const template = this.container?.querySelector(".template-select") as HTMLSelectElement | null;
+        const template = root.querySelector(".template-select") as HTMLSelectElement | null;
         template?.addEventListener("change", () => {
             this.state.selectedTemplate = template.value;
             if (template.value) {
@@ -218,15 +254,15 @@ export class WorkCenterEvents {
             this.deps.render?.();
         });
 
-        const instruction = this.container?.querySelector(".instruction-select") as HTMLSelectElement | null;
+        const instruction = root.querySelector(".instruction-select") as HTMLSelectElement | null;
         instruction?.addEventListener("change", () => {
             void this.templates.applyInstruction(this.state, instruction.value);
             WorkCenterStateManager.saveState(this.state);
         });
     }
 
-    private setupVoiceInput(): void {
-        const voice = this.container?.querySelector('[data-action="voice-input"]') as HTMLButtonElement | null;
+    private setupVoiceInput(root: HTMLElement): void {
+        const voice = root.querySelector('[data-action="voice-input"]') as HTMLButtonElement | null;
         if (!voice) return;
         voice.addEventListener("mousedown", () => this.voice.startVoiceRecording(this.state));
         const stop = () => this.voice.stopVoiceRecording(this.state);
@@ -234,14 +270,18 @@ export class WorkCenterEvents {
         voice.addEventListener("mouseleave", stop);
     }
 
-    private setupActions(): void {
-        this.container?.addEventListener("click", (event) => {
+    private setupActions(root: HTMLElement): void {
+        root.addEventListener("click", (event) => {
             const target = event.target as HTMLElement;
             const actionElement = target.closest("[data-action]") as HTMLElement | null;
             const action = actionElement?.dataset.action;
             if (!action || !actionElement) return;
 
             switch (action) {
+                case "execute":
+                    event.preventDefault();
+                    this.sendComposer(root);
+                    break;
                 case "select-files":
                     break;
                 case "new-chat":
@@ -271,7 +311,7 @@ export class WorkCenterEvents {
                     this.ingress.remove(actionElement.dataset.attachmentHash || "");
                     break;
                 case "close-attachment-viewer": {
-                    const viewer = this.container?.querySelector("[data-workcenter-attachment-viewer]");
+                    const viewer = root.querySelector("[data-workcenter-attachment-viewer]");
                     if (typeof HTMLDialogElement !== "undefined" && viewer instanceof HTMLDialogElement && typeof viewer.close === "function") {
                         viewer.close();
                     } else {
@@ -281,10 +321,10 @@ export class WorkCenterEvents {
                 }
                 case "open-request-options":
                     this.togglePanel("[data-workcenter-request-options]", actionElement);
-                    void this.templates.fillInstructionSelects(this.container, this.state);
+                    void this.templates.fillInstructionSelects(root, this.state);
                     break;
                 case "refresh-instructions":
-                    void this.templates.fillInstructionSelects(this.container, this.state);
+                    void this.templates.fillInstructionSelects(root, this.state);
                     break;
                 case "open-secondary":
                     this.togglePanel("[data-workcenter-secondary]", actionElement);
@@ -293,7 +333,7 @@ export class WorkCenterEvents {
                     this.history.showActionHistory();
                     break;
                 case "edit-templates":
-                    this.templates.showTemplateEditor(this.state, this.container as HTMLElement);
+                    this.templates.showTemplateEditor(this.state, root);
                     break;
             }
         });
@@ -310,9 +350,9 @@ export class WorkCenterEvents {
         await this.ingress.addUrl(url);
     }
 
-    private setupComposerResize(): void {
-        const handle = this.container?.querySelector("[data-composer-resize]") as HTMLElement | null;
-        const composer = this.container?.querySelector("[data-workcenter-composer]") as HTMLElement | null;
+    private setupComposerResize(root: HTMLElement): void {
+        const handle = root.querySelector("[data-composer-resize]") as HTMLElement | null;
+        const composer = root.querySelector("[data-workcenter-composer]") as HTMLElement | null;
         if (!handle || !composer) return;
 
         handle.addEventListener("pointerdown", (event) => {
@@ -321,12 +361,12 @@ export class WorkCenterEvents {
             handle.setPointerCapture?.(event.pointerId);
             const startY = event.clientY;
             const startHeight = composer.getBoundingClientRect().height;
-            const hostHeight = this.container?.getBoundingClientRect().height || startHeight;
+            const hostHeight = root.getBoundingClientRect().height || startHeight;
             const limit = Math.max(96, hostHeight * 0.75);
             const onMove = (move: PointerEvent) => {
                 const next = Math.min(limit, Math.max(72, startHeight + (startY - move.clientY)));
                 composer.style.setProperty("--wc-composer-min", `${next}px`);
-                syncWorkCenterComposerHeight(this.container);
+                syncWorkCenterComposerHeight(root);
             };
             const onUp = () => {
                 handle.removeEventListener("pointermove", onMove);
@@ -352,14 +392,15 @@ export class WorkCenterEvents {
 
     private async viewAttachment(hash: string): Promise<void> {
         const attachment = this.findAttachment(hash);
-        if (!attachment || !this.container) return;
+        const host = this.liveRoots().find((node) => node.isConnected) ?? this.container;
+        if (!attachment || !host) return;
         const file = attachment.url ? this.ingress.fileFor(attachment) : await this.ingress.resolve(attachment);
         if (!file && !attachment.url) {
             this.deps.showMessage?.("Attachment is no longer available");
             return;
         }
         await openWorkCenterAttachment({
-            host: this.container,
+            host,
             attachment,
             file,
             objectUrl: file ? this.ingress.objectUrlFor(file) : null
@@ -396,7 +437,10 @@ export class WorkCenterEvents {
         this.state.draft.content = next;
         this.state.currentPrompt = next;
         void this.actions.persistDraft(this.state);
-        this.deps.render?.();
+        for (const root of this.liveRoots()) {
+            const input = root.querySelector(".prompt-input") as HTMLTextAreaElement | null;
+            if (input) input.value = next;
+        }
     }
 
     private scheduleDraftPersistence(): void {
@@ -408,7 +452,8 @@ export class WorkCenterEvents {
     }
 
     private togglePanel(selector: string, trigger: HTMLElement): void {
-        const panel = this.container?.querySelector(selector) as HTMLElement | null;
+        const host = (trigger.closest(".workcenter-chat") as HTMLElement | null) ?? this.container;
+        const panel = host?.querySelector(selector) as HTMLElement | null;
         if (!panel) return;
         panel.hidden = !panel.hidden;
         trigger.setAttribute("aria-expanded", String(!panel.hidden));
