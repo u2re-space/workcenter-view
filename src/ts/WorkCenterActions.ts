@@ -8,6 +8,7 @@ import type { WorkCenterTemplates } from "./WorkCenterTemplates";
 import { extractJSONFromAIResponse } from "core/document/AIResponseParser";
 import { shouldHandoffViewToSibling, stashSkuHandoff } from "com/config/ecosystem-skus";
 import { runWorkCenterTurn } from "com/service/service/RecognizeData";
+import { readProcessApiResultText } from "com/routing/api/process-api";
 import {
     type WorkCenterMessage,
     type WorkCenterRequestOptions,
@@ -394,10 +395,14 @@ export class WorkCenterActions {
 
             if (epoch !== conversation.session.epoch()) return;
             if (controller.signal.aborted || result.error === "Cancelled") {
-                await conversation.session.cancel(assistant.id);
+                conversation.session.applyAssistantCompletion(assistant.id, {
+                    status: "cancelled",
+                    content: "",
+                    error: "Cancelled"
+                });
             } else if (result.ok) {
-                const content = String(result.data || "");
-                await conversation.session.completeAssistant(assistant.id, {
+                const content = this.extractTurnText(result);
+                conversation.session.applyAssistantCompletion(assistant.id, {
                     status: "complete",
                     content,
                     rawResult: result
@@ -411,32 +416,46 @@ export class WorkCenterActions {
                     responseId: result.responseId || undefined
                 };
             } else {
-                await conversation.session.completeAssistant(assistant.id, {
+                conversation.session.applyAssistantCompletion(assistant.id, {
                     status: "failed",
                     content: "",
                     error: result.error || "The request did not return a response"
                 });
             }
+            this.syncConversationState(state);
+            void conversation.session.persistDraft().catch(() => undefined);
         } catch (error) {
             if (epoch === conversation.session.epoch()) {
-                await conversation.session.completeAssistant(assistant.id, {
+                conversation.session.applyAssistantCompletion(assistant.id, {
                     status: controller.signal.aborted ? "cancelled" : "failed",
                     content: "",
                     error: controller.signal.aborted
                         ? "Cancelled"
                         : (error instanceof Error ? error.message : "Failed to process message")
                 });
+                this.syncConversationState(state);
+                void conversation.session.persistDraft().catch(() => undefined);
             }
         } finally {
             if (this.activeTurns.get(assistant.id) === controller) {
                 this.activeTurns.delete(assistant.id);
             }
-            if (epoch === conversation.session.epoch()) {
-                this.syncConversationState(state);
-                this.history.updateRecentHistory(state);
-                this.ui.updateDataPipeline(state);
-            }
+            this.syncConversationState(state);
+            this.history.updateRecentHistory(state);
+            this.ui.updateDataPipeline(state);
         }
+    }
+
+    private extractTurnText(result: unknown): string {
+        if (result == null) return "";
+        if (typeof result === "string") return readProcessApiResultText(result);
+        const row = result as { data?: unknown; raw?: unknown };
+        if (typeof row.data === "string" && row.data.trim()) return row.data.trim();
+        return (
+            readProcessApiResultText(result) ||
+            readProcessApiResultText(row.raw) ||
+            ""
+        );
     }
 
     private getLastSuccessfulPrompt(): string {

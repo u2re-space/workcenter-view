@@ -82,6 +82,18 @@ const cloneSnapshot = (snapshot: WorkCenterSessionSnapshot): WorkCenterSessionSn
     messages: snapshot.messages.map(cloneMessage)
 });
 
+/** Persist only display fields — GPT envelopes can be huge or cyclic and stall OPFS. */
+const slimRawResult = (value: unknown): unknown => {
+    if (value == null || typeof value !== "object") return value;
+    const row = value as Record<string, unknown>;
+    return {
+        ok: row.ok,
+        data: typeof row.data === "string" ? row.data : undefined,
+        error: typeof row.error === "string" ? row.error : undefined,
+        responseId: typeof row.responseId === "string" ? row.responseId : undefined
+    };
+};
+
 const isSnapshot = (value: unknown): value is WorkCenterSessionSnapshot => {
     if (!value || typeof value !== "object") return false;
     const candidate = value as Partial<WorkCenterSessionSnapshot>;
@@ -98,11 +110,18 @@ export type AssistantCompletion = Pick<WorkCenterMessage, "status"> &
 /** Conversation mutation facade that persists every durable transition. */
 export class WorkCenterSession {
     private state = emptySnapshot();
+    private persistGeneration = 0;
+    private persistTail: Promise<void> = Promise.resolve();
 
     constructor(private readonly persistence: WorkCenterSessionPersistence) {}
 
     async hydrate(): Promise<WorkCenterSessionSnapshot> {
         const restored = await this.persistence.load();
+        // WHY: OPFS load can resolve after Send already committed a live turn.
+        // Replacing that transcript paints Thinking… after GPT already finished.
+        if (this.state.messages.length > 0) {
+            return this.snapshot();
+        }
         this.state = isSnapshot(restored) ? cloneSnapshot(restored) : emptySnapshot();
         return this.snapshot();
     }
@@ -113,6 +132,22 @@ export class WorkCenterSession {
 
     epoch(): number {
         return this.state.epoch;
+    }
+
+    latestPendingAssistant(): WorkCenterMessage | null {
+        for (let index = this.state.messages.length - 1; index >= 0; index -= 1) {
+            const message = this.state.messages[index];
+            if (message?.role === "assistant" && message.status === "pending") return cloneMessage(message);
+        }
+        return null;
+    }
+
+    latestCompleteAssistant(): WorkCenterMessage | null {
+        for (let index = this.state.messages.length - 1; index >= 0; index -= 1) {
+            const message = this.state.messages[index];
+            if (message?.role === "assistant" && message.status === "complete") return cloneMessage(message);
+        }
+        return null;
     }
 
     setDraft(draft: WorkCenterDraft): void {
@@ -169,16 +204,32 @@ export class WorkCenterSession {
         return submitted;
     }
 
-    async completeAssistant(id: string, completion: AssistantCompletion): Promise<WorkCenterMessage | null> {
-        const message = this.state.messages.find((entry) => entry.id === id && entry.role === "assistant");
+    /** In-memory completion so the transcript can paint before OPFS save. */
+    applyAssistantCompletion(id: string, completion: AssistantCompletion): WorkCenterMessage | null {
+        let message = this.state.messages.find((entry) => entry.id === id && entry.role === "assistant");
+        if (!message) {
+            for (let index = this.state.messages.length - 1; index >= 0; index -= 1) {
+                const entry = this.state.messages[index];
+                if (entry?.role === "assistant" && entry.status === "pending") {
+                    message = entry;
+                    break;
+                }
+            }
+        }
         if (!message) return null;
 
         message.status = completion.status;
         if (completion.content !== undefined) message.content = completion.content;
-        if (completion.rawResult !== undefined) message.rawResult = completion.rawResult;
+        if (completion.rawResult !== undefined) message.rawResult = slimRawResult(completion.rawResult);
         if (completion.error !== undefined) message.error = completion.error;
-        await this.persist();
         return cloneMessage(message);
+    }
+
+    async completeAssistant(id: string, completion: AssistantCompletion): Promise<WorkCenterMessage | null> {
+        const message = this.applyAssistantCompletion(id, completion);
+        if (!message) return null;
+        await this.persist();
+        return message;
     }
 
     async markAttachmentError(
@@ -252,7 +303,15 @@ export class WorkCenterSession {
         await this.persistence.clear();
     }
 
-    private async persist(): Promise<void> {
-        await this.persistence.save(this.snapshot());
+    private persist(): Promise<void> {
+        const generation = ++this.persistGeneration;
+        const snapshot = this.snapshot();
+        this.persistTail = this.persistTail
+            .catch(() => undefined)
+            .then(async () => {
+                if (generation !== this.persistGeneration) return;
+                await this.persistence.save(snapshot);
+            });
+        return this.persistTail;
     }
 }

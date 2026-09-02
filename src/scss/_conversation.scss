@@ -85,7 +85,8 @@
         position: relative;
         z-index: 0;
         display: flex;
-        flex-direction: column;
+        flex-direction: column !important;
+        flex-wrap: nowrap;
         gap: var(--space-lg);
         min-block-size: 0;
         overflow-y: auto;
@@ -93,6 +94,10 @@
         padding: var(--space-sm) max(var(--space-sm), 8cqi);
         scrollbar-width: thin;
         scrollbar-color: color-mix(in oklab, var(--color-on-surface) 24%, transparent) transparent;
+        justify-content: safe center;
+        justify-items: safe center;
+        align-items: safe center;
+        align-content: safe center;
     }
 
     .workcenter-transcript__empty {

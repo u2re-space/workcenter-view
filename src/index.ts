@@ -282,8 +282,10 @@ export class WorkCenterView extends UIElement implements View {
             "content-process",
             "file-attach",
             "share-target-input",
+            "share-received",
             "share-target-result",
             "ai-result",
+            "process-api-result",
             "content-share"
         ].includes(messageType);
     }
@@ -328,7 +330,7 @@ export class WorkCenterView extends UIElement implements View {
             }
         }
 
-        if (msg.type === "share-target-input" || msg.type === "share-target-result" || msg.type === "ai-result") {
+        if (msg.type === "share-target-input" || msg.type === "share-received" || msg.type === "share-target-result" || msg.type === "ai-result" || msg.type === "process-api-result") {
             await this.manager.handleExternalMessage(msg as any);
             this.emitFilesChanged();
             return;

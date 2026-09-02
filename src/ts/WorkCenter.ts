@@ -86,7 +86,7 @@ import { WorkCenterDataProcessing } from "./WorkCenterDataProcessing";
 import { WorkCenterEvents } from "./WorkCenterEvents";
 
 // Import component registration system
-import { registerComponent, initializeComponent } from "com/core/UnifiedMessaging";
+import { registerComponent, initializeComponent, replayQueuedMessagesForDestination } from "com/routing/channel/UnifiedMessaging";
 import { WorkCenterResults } from "./WorkCenterResults";
 import { WorkCenterAttachments } from "./WorkCenterAttachments";
 import { WorkCenterPrompts } from "./WorkCenterPrompts";
@@ -99,8 +99,11 @@ import {
 } from "./WorkCenterSessionPersistence";
 import { WorkCenterDocumentPreparer } from "./WorkCenterDocumentPreparation";
 import { takeHeldIngressFiles } from "com/routing/channel/sku-ingress";
+import { unwrapSwInteropMessage } from "com/routing/channel/UniformInterop";
+import { readProcessApiResultText } from "com/routing/api/process-api";
 import { bindWorkCenterCommandBus } from "./WorkCenterCommandBus";
 import {
+    isWorkCenterCommand,
     isWorkCenterCommandEnvelope,
     type WorkCenterCommand
 } from "./WorkCenterCommands";
@@ -127,6 +130,7 @@ export class WorkCenterManager {
     private documentPreparer: WorkCenterDocumentPreparer;
     private sessionReady: Promise<void>;
     private processedMessageIds = new Set<string>();
+    private deliveredResultKeys = new Set<string>();
     private unbindCommandBus: () => void = () => {};
 
     constructor(dependencies: WorkCenterDependencies) {
@@ -216,6 +220,9 @@ export class WorkCenterManager {
             console.log(`[WorkCenter] Processing pending message:`, message);
             this.handleExternalMessage(message);
         }
+        void this.sessionReady.then(() => {
+            void replayQueuedMessagesForDestination("workcenter").catch(() => undefined);
+        });
 
         // Listen for hash changes to update UI elements like drop hints
         if (typeof globalThis !== 'undefined') {
@@ -391,6 +398,55 @@ export class WorkCenterManager {
         }
     }
 
+    private resultText(data: unknown): string {
+        if (data == null) return "";
+        if (typeof data === "string") return data.trim();
+        const row = data as Record<string, unknown>;
+        return String(
+            readProcessApiResultText(data) ||
+            row.content ||
+            row.text ||
+            (typeof row.data === "string" ? row.data : "") ||
+            ""
+        ).trim();
+    }
+
+    private rememberResult(text: string): boolean {
+        const key = text.replace(/\s+/g, " ").slice(0, 400);
+        if (!key) return false;
+        if (this.deliveredResultKeys.has(key)) return false;
+        this.deliveredResultKeys.add(key);
+        if (this.deliveredResultKeys.size > 32) {
+            const first = this.deliveredResultKeys.values().next().value;
+            if (first) this.deliveredResultKeys.delete(first);
+        }
+        return true;
+    }
+
+    /** Complete a waiting turn, or append a late SW / share result that missed the fetch. */
+    private async applyArrivedResult(note: string, raw: unknown, completePendingTurn: boolean): Promise<void> {
+        if (!note) return;
+        const pending = completePendingTurn ? this.session.latestPendingAssistant() : null;
+        if (pending) {
+            this.session.applyAssistantCompletion(pending.id, {
+                status: "complete",
+                content: note,
+                rawResult: raw
+            });
+            this.rememberResult(note);
+            void this.session.persistDraft().catch(() => undefined);
+            this.syncStateFromSession(true);
+            return;
+        }
+        const last = this.session.latestCompleteAssistant();
+        if (last && last.content.replace(/\s+/g, " ").trim() === note.replace(/\s+/g, " ").trim()) {
+            return;
+        }
+        if (!this.rememberResult(note)) return;
+        await this.session.appendAssistantNote(note);
+        this.syncStateFromSession(true);
+    }
+
     /** Normalize all channel/share payloads into the active conversation draft. */
     private async handleIncomingContent(data: any, contentType: string): Promise<void> {
         await this.sessionReady;
@@ -463,6 +519,18 @@ export class WorkCenterManager {
             await this.dispatchCommand(message.command);
             return;
         }
+        const unwrapped = unwrapSwInteropMessage(message);
+        if (unwrapped?.command && isWorkCenterCommand(unwrapped.command)) {
+            await this.dispatchCommand(unwrapped.command);
+            return;
+        }
+        if (unwrapped?.type) {
+            message = {
+                ...((message && typeof message === "object") ? message : {}),
+                type: unwrapped.type,
+                data: unwrapped.data ?? message.data
+            };
+        }
         await this.sessionReady;
         const messageId = typeof message?.id === "string" ? message.id : "";
         if (messageId) {
@@ -477,30 +545,35 @@ export class WorkCenterManager {
         }
 
         // Share-target messages should update both attachments and results pipeline.
-        if (message.type === 'share-target-input' && message.data) {
+        if ((message.type === 'share-target-input' || message.type === 'share-received') && message.data) {
             await this.handleIncomingContent(message.data, message.contentType || "text");
             return;
         }
 
         if (message.type === 'share-target-result' && message.data) {
-            const note = String(message.data.content ?? message.data.rawData ?? "").trim();
-            if (note) {
-                await this.session.appendAssistantNote(note);
-                this.syncStateFromSession(false);
-            }
-            await this.shareTarget.addShareTargetResult(this.state, message.data);
+            const note = this.resultText(message.data);
+            await this.applyArrivedResult(note, message.data, false);
+            await this.shareTarget.addShareTargetResult(this.state, {
+                ...message.data,
+                content: note || message.data.content
+            });
             this.ui.updateDataPipeline(this.state);
+            this.paintLiveConversation();
             return;
         }
 
-        if (message.type === 'ai-result' && message.data) {
-            const note = String(message.data.data ?? message.data.content ?? message.data.text ?? "").trim();
-            if (note && message.data.success !== false) {
-                await this.session.appendAssistantNote(note);
-                this.syncStateFromSession(false);
+        if ((message.type === 'ai-result' || message.type === 'process-api-result') && message.data) {
+            const note = this.resultText(message.data);
+            if (message.data.success !== false) {
+                await this.applyArrivedResult(note, message.data, true);
             }
-            await this.shareTarget.handleAIResult(this.state, message.data);
+            await this.shareTarget.handleAIResult(this.state, {
+                success: message.data.success !== false,
+                data: note || message.data.data || message.data,
+                error: message.data.error
+            });
             this.ui.updateDataPipeline(this.state);
+            this.paintLiveConversation();
             return;
         }
 

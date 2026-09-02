@@ -7,6 +7,7 @@
  */
 
 import { BROADCAST_CHANNELS, viewBroadcastChannelName } from "com/other/config/Names";
+import { unwrapSwInteropMessage } from "com/routing/channel/UniformInterop";
 import {
     isWorkCenterCommand,
     isWorkCenterCommandEnvelope,
@@ -21,7 +22,14 @@ export const bindWorkCenterCommandBus = (handler: WorkCenterCommandHandler): (()
     if (typeof BroadcastChannel === "undefined") return () => {};
     const channels: BroadcastChannel[] = [];
     const onMessage = (event: MessageEvent): void => {
-        const data = event.data;
+        const unwrapped = unwrapSwInteropMessage(event.data);
+        const data = unwrapped
+            ? (unwrapped.type === "workcenter-command" && unwrapped.command
+                ? { type: "workcenter-command", command: unwrapped.command }
+                : unwrapped.command && isWorkCenterCommand(unwrapped.command)
+                    ? { type: "workcenter-command", command: unwrapped.command }
+                    : unwrapped.raw)
+            : event.data;
         const command = isWorkCenterCommandEnvelope(data)
             ? data.command
             : isWorkCenterCommand(data)

@@ -138,3 +138,27 @@ test("attachment preparation errors stay attached to the submitted user turn", a
         "Unreadable PDF"
     );
 });
+
+test("hydrate does not replace a live pending turn with a stale snapshot", async () => {
+    const persistence = createMemoryPersistence();
+    persistence.saved = {
+        version: 1,
+        epoch: 0,
+        draft: { content: "", attachments: [] },
+        messages: []
+    };
+    const session = new WorkCenterSession(persistence);
+    session.setDraft({ content: "Analyze the integral", attachments: [] });
+    const submitted = session.commitDraft({ outputFormat: "markdown" });
+    session.applyAssistantCompletion(submitted.assistant.id, {
+        status: "complete",
+        content: "### Main Topic"
+    });
+
+    await session.hydrate();
+
+    const assistant = session.snapshot().messages.find((entry) => entry.role === "assistant");
+    assert.equal(assistant?.id, submitted.assistant.id);
+    assert.equal(assistant?.status, "complete");
+    assert.equal(assistant?.content, "### Main Topic");
+});

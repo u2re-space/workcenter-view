@@ -30,6 +30,9 @@
             "com/config/Settings": [
                 "../../shared/runtime/settings-config.ts"
             ],
+            "com/core/UnifiedMessaging": [
+                "../../projects/subsystem/runtime/messaging.ts"
+            ],
             "@fest-lib/*": [
                 "../../shared/fest/*"
             ],
