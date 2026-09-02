@@ -3,6 +3,7 @@ import test from "node:test";
 
 import "./dom-shim";
 import {
+    pickRichestSessionSnapshot,
     WorkCenterSession,
     type WorkCenterSessionPersistence,
     type WorkCenterSessionSnapshot
@@ -95,6 +96,33 @@ test("hydrate restores a persisted transcript and new chat clears it", async () 
     await reopened.newChat();
     assert.deepEqual(reopened.snapshot().messages, []);
     assert.equal(persistence.clears, 1);
+    assert.equal(persistence.saved?.messages.length, 0);
+    assert.equal(persistence.saved?.epoch, 1);
+});
+
+test("new-chat epoch beats a stale longer transcript", () => {
+    const stale: WorkCenterSessionSnapshot = {
+        version: 1,
+        epoch: 0,
+        draft: { content: "", attachments: [] },
+        messages: [{
+            id: "user-1",
+            role: "user",
+            createdAt: 1,
+            content: "old",
+            attachments: [],
+            status: "complete"
+        }]
+    };
+    const cleared: WorkCenterSessionSnapshot = {
+        version: 1,
+        epoch: 1,
+        draft: { content: "", attachments: [] },
+        messages: []
+    };
+    const picked = pickRichestSessionSnapshot(stale, cleared);
+    assert.equal(picked?.epoch, 1);
+    assert.deepEqual(picked?.messages, []);
 });
 
 test("retry keeps the original submitted turn after a failed assistant result", async () => {

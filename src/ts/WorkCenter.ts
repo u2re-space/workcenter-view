@@ -98,7 +98,7 @@ import {
     createWorkCenterSessionPersistence
 } from "./WorkCenterSessionPersistence";
 import { WorkCenterDocumentPreparer } from "./WorkCenterDocumentPreparation";
-import { takeHeldIngressFiles } from "com/routing/channel/sku-ingress";
+import { dropHeldIngressFiles, onHeldIngressFiles, takeHeldIngressFiles } from "com/routing/channel/sku-ingress";
 import { unwrapSwInteropMessage } from "com/routing/channel/UniformInterop";
 import { readProcessApiResultText } from "com/routing/api/process-api";
 import { bindWorkCenterCommandBus } from "./WorkCenterCommandBus";
@@ -107,6 +107,40 @@ import {
     isWorkCenterCommandEnvelope,
     type WorkCenterCommand
 } from "./WorkCenterCommands";
+
+/** Composer lives under `cw-shell-*` shadow — `document.querySelector` misses it. */
+export const queryLiveWorkCenterChats = (): HTMLElement[] => {
+    const out: HTMLElement[] = [];
+    const add = (node: Element | null | undefined): void => {
+        if (!(node instanceof HTMLElement) || !node.isConnected) return;
+        const chat = node.classList.contains("workcenter-chat")
+            ? node
+            : node.querySelector<HTMLElement>(".workcenter-chat");
+        const host = chat || (node.querySelector("[data-workcenter-composer]") ? node : null);
+        if (!host || out.includes(host)) return;
+        if (!host.querySelector("[data-workcenter-transcript], [data-workcenter-composer]")) return;
+        out.push(host);
+    };
+    if (typeof document === "undefined") return out;
+    add(document.querySelector(".workcenter-chat"));
+    document.querySelectorAll("cw-workcenter-view").forEach((ce) => {
+        add(ce);
+        add(ce.shadowRoot?.querySelector(".workcenter-chat") ?? null);
+    });
+    document
+        .querySelectorAll("[data-shell], cw-shell-minimal, cw-shell-immersive, cw-shell-content, cw-shell-environment")
+        .forEach((shell) => {
+            const sr = (shell as HTMLElement).shadowRoot;
+            if (!sr) return;
+            sr.querySelectorAll(".workcenter-chat, [data-workcenter-composer]").forEach((node) => {
+                const chat =
+                    (node as HTMLElement).closest?.(".workcenter-chat") ||
+                    (node as HTMLElement);
+                add(chat);
+            });
+        });
+    return out;
+};
 
 export class WorkCenterManager {
     private state: WorkCenterState;
@@ -132,6 +166,8 @@ export class WorkCenterManager {
     private processedMessageIds = new Set<string>();
     private deliveredResultKeys = new Set<string>();
     private unbindCommandBus: () => void = () => {};
+    private unbindHeldIngress: () => void = () => {};
+    private unbindPagePersist: () => void = () => {};
 
     constructor(dependencies: WorkCenterDependencies) {
         this.deps = dependencies;
@@ -204,6 +240,10 @@ export class WorkCenterManager {
         );
 
         this.unbindCommandBus = bindWorkCenterCommandBus((command) => this.dispatchCommand(command));
+        this.unbindHeldIngress = onHeldIngressFiles((files) => {
+            void this.handleIncomingContent({ files, fileCount: files.length }, "file");
+        });
+        this.unbindPagePersist = this.bindPagePersist();
 
         // Initialize share target result listener
         this.shareTarget.initShareTargetListener(this.state);
@@ -220,8 +260,13 @@ export class WorkCenterManager {
             console.log(`[WorkCenter] Processing pending message:`, message);
             this.handleExternalMessage(message);
         }
-        void this.sessionReady.then(() => {
-            void replayQueuedMessagesForDestination("workcenter").catch(() => undefined);
+        void this.sessionReady.then(async () => {
+            await replayQueuedMessagesForDestination("workcenter").catch(() => undefined);
+            /* WHY: share/launch-queue often holds File blobs before this view exists. */
+            const held = takeHeldIngressFiles();
+            if (held.length) {
+                await this.handleIncomingContent({ files: held, fileCount: held.length }, "file");
+            }
         });
 
         // Listen for hash changes to update UI elements like drop hints
@@ -262,6 +307,9 @@ export class WorkCenterManager {
             this.state.sessionHydrated = true;
         } finally {
             this.paintLiveConversation();
+            if (typeof requestAnimationFrame === "function") {
+                requestAnimationFrame(() => this.paintLiveConversation());
+            }
         }
     }
 
@@ -289,9 +337,7 @@ export class WorkCenterManager {
         const hosts = new Set<ParentNode>();
         const current = this.ui?.getContainer();
         if (current) hosts.add(current);
-        if (typeof document !== "undefined") {
-            document.querySelectorAll(".workcenter-chat").forEach((node) => hosts.add(node));
-        }
+        for (const chat of queryLiveWorkCenterChats()) hosts.add(chat);
         return hosts;
     }
 
@@ -453,7 +499,16 @@ export class WorkCenterManager {
         try {
             const files: File[] = [];
             if (Array.isArray(data?.files)) {
-                files.push(...data.files.filter((entry: unknown): entry is File => entry instanceof File));
+                for (const entry of data.files) {
+                    if (entry instanceof File) files.push(entry);
+                    else if (typeof Blob !== "undefined" && entry instanceof Blob) {
+                        files.push(new File(
+                            [entry],
+                            String(data?.filename || data?.title || `attachment-${Date.now()}`),
+                            { type: entry.type || "application/octet-stream" }
+                        ));
+                    }
+                }
             }
             if (data?.file instanceof File) files.push(data.file);
             if (typeof Blob !== "undefined" && data?.blob instanceof Blob) {
@@ -474,6 +529,7 @@ export class WorkCenterManager {
                     }
                 }
             }
+            /* WHY: do not wipe a merged share+launch hold when this envelope already has Files. */
             if (!files.length) files.push(...takeHeldIngressFiles());
 
             const rawText = data?.text ?? data?.content;
@@ -491,12 +547,16 @@ export class WorkCenterManager {
             }
 
             const attached = await this.attachmentIngress.addFiles(files);
+            if (attached.length) dropHeldIngressFiles(files);
             if (typeof data?.url === "string") await this.attachmentIngress.addUrl(data.url);
 
             if (text.trim() && attached.length === 0) {
                 await this.appendDraftText(text);
             }
             if (attached.length) {
+                const live = queryLiveWorkCenterChats()[0];
+                if (live) this.adoptLiveRoot(live);
+                this.paintLiveConversation();
                 this.deps.showMessage(
                     attached.length === 1
                         ? `Attached ${attached[0]?.name || "file"}`
@@ -594,8 +654,32 @@ export class WorkCenterManager {
         return this.state;
     }
 
+    /** Flush transcript + draft when the Process PWA is backgrounded or reloaded. */
+    private bindPagePersist(): () => void {
+        if (typeof window === "undefined") return () => {};
+        const flush = (): void => {
+            try {
+                this.session.setDraft(this.state.draft);
+                void this.session.persistDraft();
+            } catch {
+                /* ignore */
+            }
+        };
+        const onVisibility = (): void => {
+            if (document.visibilityState === "hidden") flush();
+        };
+        window.addEventListener("pagehide", flush);
+        document.addEventListener("visibilitychange", onVisibility);
+        return () => {
+            window.removeEventListener("pagehide", flush);
+            document.removeEventListener("visibilitychange", onVisibility);
+        };
+    }
+
     destroy(): void {
         this.unbindCommandBus();
+        this.unbindHeldIngress();
+        this.unbindPagePersist();
         // Clear container references
         this.ui.setContainer(null);
         this.attachments.setContainer(null);
@@ -621,6 +705,7 @@ export class WorkCenterManager {
         this.ui.updateFileCounter(this.state);
         this.history.updateRecentHistory(this.state);
         void this.templates.fillInstructionSelects(container, this.state);
+        if (this.state.sessionHydrated) this.paintLiveConversation();
 
         return container;
     }

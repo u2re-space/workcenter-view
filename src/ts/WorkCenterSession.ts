@@ -104,6 +104,31 @@ const isSnapshot = (value: unknown): value is WorkCenterSessionSnapshot => {
         Array.isArray(candidate.draft.attachments);
 };
 
+/** Higher epoch wins (New chat). Same epoch: longer transcript, then draft attachments. */
+export const rankSessionSnapshot = (snapshot: WorkCenterSessionSnapshot | null): number => {
+    if (!isSnapshot(snapshot)) return -1;
+    return snapshot.epoch * 1_000_000 +
+        snapshot.messages.length * 10 +
+        snapshot.draft.attachments.length +
+        (snapshot.draft.content.trim() ? 1 : 0);
+};
+
+export const pickRichestSessionSnapshot = (
+    ...candidates: Array<WorkCenterSessionSnapshot | null | undefined>
+): WorkCenterSessionSnapshot | null => {
+    let best: WorkCenterSessionSnapshot | null = null;
+    let bestRank = -1;
+    for (const candidate of candidates) {
+        if (!isSnapshot(candidate)) continue;
+        const rank = rankSessionSnapshot(candidate);
+        if (rank > bestRank) {
+            best = candidate;
+            bestRank = rank;
+        }
+    }
+    return best;
+};
+
 export type AssistantCompletion = Pick<WorkCenterMessage, "status"> &
     Partial<Pick<WorkCenterMessage, "content" | "rawResult" | "error">>;
 
@@ -112,6 +137,8 @@ export class WorkCenterSession {
     private state = emptySnapshot();
     private persistGeneration = 0;
     private persistTail: Promise<void> = Promise.resolve();
+    private lastPersistedEpoch = 0;
+    private lastPersistedMessageCount = 0;
 
     constructor(private readonly persistence: WorkCenterSessionPersistence) {}
 
@@ -123,6 +150,8 @@ export class WorkCenterSession {
             return this.snapshot();
         }
         this.state = isSnapshot(restored) ? cloneSnapshot(restored) : emptySnapshot();
+        this.lastPersistedEpoch = this.state.epoch;
+        this.lastPersistedMessageCount = this.state.messages.length;
         return this.snapshot();
     }
 
@@ -300,17 +329,32 @@ export class WorkCenterSession {
             ...emptySnapshot(),
             epoch: this.state.epoch + 1
         };
+        this.lastPersistedEpoch = this.state.epoch;
+        this.lastPersistedMessageCount = 0;
         await this.persistence.clear();
+        /* INVARIANT: write the empty higher-epoch snapshot so a stale OPFS transcript cannot win on reload. */
+        await this.persist({ allowEmpty: true });
     }
 
-    private persist(): Promise<void> {
+    private persist(opts?: { allowEmpty?: boolean }): Promise<void> {
         const generation = ++this.persistGeneration;
         const snapshot = this.snapshot();
         this.persistTail = this.persistTail
             .catch(() => undefined)
             .then(async () => {
                 if (generation !== this.persistGeneration) return;
+                /* WHY: a draft-only persist before hydrate must not replace the saved chat. */
+                if (
+                    !opts?.allowEmpty &&
+                    snapshot.messages.length === 0 &&
+                    this.lastPersistedMessageCount > 0 &&
+                    snapshot.epoch === this.lastPersistedEpoch
+                ) {
+                    return;
+                }
                 await this.persistence.save(snapshot);
+                this.lastPersistedEpoch = snapshot.epoch;
+                this.lastPersistedMessageCount = snapshot.messages.length;
             });
         return this.persistTail;
     }

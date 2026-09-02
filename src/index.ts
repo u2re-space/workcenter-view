@@ -5,9 +5,10 @@
  */
 
 import { takeSkuHandoff } from "com/config/ecosystem-skus";
+import { flushHeldIngressToWorkCenter, peekHeldIngressFiles } from "com/routing/channel/sku-ingress";
 import { loadAsAdopted, removeAdopted } from "@fest-lib/style-lib";
 import { type BaseViewOptions } from "views/types";
-import { WorkCenterManager } from "./ts/WorkCenter";
+import { queryLiveWorkCenterChats, WorkCenterManager } from "./ts/WorkCenter";
 import type { WorkCenterDependencies } from "./ts/WorkCenterState";
 
 // @ts-ignore - SCSS import
@@ -444,6 +445,8 @@ export class WorkCenterView extends UIElement implements View {
 
     private connectedChat(): HTMLElement | null {
         if (this.element?.isConnected) return this.element;
+        const live = queryLiveWorkCenterChats()[0];
+        if (live) return live;
         if (typeof document === "undefined") return null;
         return document.querySelector<HTMLElement>(".workcenter-chat[data-view='workcenter']");
     }
@@ -553,8 +556,23 @@ export class WorkCenterView extends UIElement implements View {
             this.requestRender();
         }
         requestAnimationFrame(() => {
-            void this.flushPendingMessages();
+            void this.flushVisibleAttachments();
         });
+    }
+
+    /** Share/launch Files sit in hold; unified delivery can skip handleMessage. Paint the live composer. */
+    private async flushVisibleAttachments(): Promise<void> {
+        const live = this.connectedChat();
+        if (live && this.manager) {
+            this.element = live;
+            this.manager.adoptLiveRoot(live);
+        }
+        await flushHeldIngressToWorkCenter();
+        const held = peekHeldIngressFiles();
+        if (held.length && this.manager) await this.manager.addFiles(held);
+        this.manager?.paintLiveConversation();
+        this.emitFilesChanged();
+        await this.flushPendingMessages();
     }
 
     private onHide(): void {
