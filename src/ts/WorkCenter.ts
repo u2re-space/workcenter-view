@@ -98,7 +98,7 @@ import {
     createWorkCenterSessionPersistence
 } from "./WorkCenterSessionPersistence";
 import { WorkCenterDocumentPreparer } from "./WorkCenterDocumentPreparation";
-import { dropHeldIngressFiles, onHeldIngressFiles, takeHeldIngressFiles } from "com/routing/channel/sku-ingress";
+import { dropHeldIngressFiles, isAndroidLocalShareUri, onHeldIngressFiles, takeHeldIngressFiles } from "com/routing/channel/sku-ingress";
 import { unwrapSwInteropMessage } from "com/routing/channel/UniformInterop";
 import { readProcessApiResultText } from "com/routing/api/process-api";
 import { bindWorkCenterCommandBus } from "./WorkCenterCommandBus";
@@ -527,6 +527,9 @@ export class WorkCenterManager {
 
     /** Normalize all channel/share payloads into the active conversation draft. */
     private async handleIncomingContent(data: any, contentType: string): Promise<void> {
+        const action = String(data?.hint?.action || data?.action || "").toLowerCase();
+        /* INVARIANT: process-mode ingress is clipboard-only — never attach into chat. */
+        if (action === "process") return;
         await this.whenSessionReady();
         try {
             const files: File[] = [];
@@ -570,7 +573,12 @@ export class WorkCenterManager {
                 : typeof rawText === "string"
                     ? rawText
                     : JSON.stringify(rawText, null, 2);
-            if (!files.length && (String(data?.filename || "").trim() || text.trim())) {
+            if (
+                !files.length &&
+                !isAndroidLocalShareUri(text) &&
+                !isAndroidLocalShareUri(typeof data?.url === "string" ? data.url : "") &&
+                (String(data?.filename || "").trim() || text.trim())
+            ) {
                 files.push(new File(
                     [text],
                     String(data?.filename || data?.title || `shared-${Date.now()}.txt`),
@@ -580,10 +588,37 @@ export class WorkCenterManager {
 
             const attached = await this.attachmentIngress.addFiles(files);
             if (attached.length) dropHeldIngressFiles(files);
-            if (typeof data?.url === "string") await this.attachmentIngress.addUrl(data.url);
+            if (typeof data?.url === "string" && !isAndroidLocalShareUri(data.url)) {
+                await this.attachmentIngress.addUrl(data.url);
+            }
 
-            if (text.trim() && attached.length === 0) {
-                await this.appendDraftText(text);
+            const source = String(data?.source || data?.route || "").toLowerCase();
+            const shareLike =
+                action === "attach" ||
+                /share|launch|capacitor|sku-handoff|open-with/.test(source);
+            /* INVARIANT: share/open-with attach is a chip — never the composer draft. */
+            if (text.trim() && attached.length === 0 && !isAndroidLocalShareUri(text)) {
+                if (shareLike) {
+                    const extra = await this.attachmentIngress.addFiles([
+                        new File(
+                            [text],
+                            String(data?.filename || data?.title || `shared-${Date.now()}.txt`),
+                            { type: contentType === "markdown" ? "text/markdown" : "text/plain" }
+                        )
+                    ]);
+                    if (extra.length) {
+                        const live = queryLiveWorkCenterChats()[0];
+                        if (live) this.adoptLiveRoot(live);
+                        this.paintLiveConversation();
+                        this.deps.showMessage(
+                            extra.length === 1
+                                ? `Attached ${extra[0]?.name || "file"}`
+                                : `Attached ${extra.length} files`
+                        );
+                    }
+                } else {
+                    await this.appendDraftText(text);
+                }
             }
             if (attached.length) {
                 const live = queryLiveWorkCenterChats()[0];
@@ -642,15 +677,8 @@ export class WorkCenterManager {
             return;
         }
 
-        if (message.type === 'share-target-result' && message.data) {
-            const note = this.resultText(message.data);
-            await this.applyArrivedResult(note, message.data, false);
-            await this.shareTarget.addShareTargetResult(this.state, {
-                ...message.data,
-                content: note || message.data.content
-            });
-            this.ui.updateDataPipeline(this.state);
-            this.paintLiveConversation();
+        if (message.type === 'share-target-result') {
+            /* INVARIANT: process results go to the device clipboard, not the transcript. */
             return;
         }
 

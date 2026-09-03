@@ -414,13 +414,13 @@ export class WorkCenterView extends UIElement implements View {
         const handoff = takeSkuHandoff("workcenter", "process");
         if (handoff && (handoff.content || handoff.filename)) {
             this.pendingMessages.unshift({
-                type: "content-share",
-                contentType: "markdown",
+                type: "content-attach",
+                contentType: "file",
                 data: {
                     text: handoff.content,
-                    content: handoff.content,
                     filename: handoff.filename,
-                    source: "sku-handoff"
+                    source: "sku-handoff",
+                    hint: { action: "attach", filename: handoff.filename }
                 }
             });
         }
