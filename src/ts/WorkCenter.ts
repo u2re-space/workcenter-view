@@ -132,6 +132,11 @@ export const queryLiveWorkCenterChats = (): HTMLElement[] => {
         .forEach((shell) => {
             const sr = (shell as HTMLElement).shadowRoot;
             if (!sr) return;
+            sr.querySelectorAll("cw-workcenter-view").forEach((ce) => {
+                add(ce);
+                add(ce.querySelector(".workcenter-chat"));
+                add(ce.shadowRoot?.querySelector(".workcenter-chat") ?? null);
+            });
             sr.querySelectorAll(".workcenter-chat, [data-workcenter-composer]").forEach((node) => {
                 const chat =
                     (node as HTMLElement).closest?.(".workcenter-chat") ||
@@ -359,12 +364,39 @@ export class WorkCenterManager {
         this.state.currentPrompt = snapshot.draft.content;
         this.state.sessionEpoch = snapshot.epoch;
         this.state.sessionHydrated = true;
+        const last = [...snapshot.messages].reverse().find(
+            (message) => message.role === "assistant" && message.status === "complete" && message.content.trim()
+        );
+        if (last) {
+            this.state.lastRawResult = last.rawResult ?? last.content;
+            this.state.recognizedData = {
+                content: last.content,
+                timestamp: last.createdAt,
+                source: last.attachments.length ? "files" : "text",
+                recognizedAs: "markdown",
+                responseId: (() => {
+                    const raw = last.rawResult;
+                    if (!raw || typeof raw !== "object") return undefined;
+                    const id = (raw as { responseId?: unknown }).responseId;
+                    return typeof id === "string" ? id : undefined;
+                })()
+            };
+        }
         this.deps.onFilesChanged?.();
         if (render) this.paintLiveConversation();
     }
 
+    private async whenSessionReady(ms = 400): Promise<void> {
+        await Promise.race([
+            this.sessionReady,
+            new Promise<void>((resolve) => {
+                setTimeout(resolve, ms);
+            })
+        ]);
+    }
+
     async addFiles(files: File[]): Promise<void> {
-        await this.sessionReady;
+        await this.whenSessionReady();
         await this.attachmentIngress.addFiles(files);
     }
 
@@ -495,7 +527,7 @@ export class WorkCenterManager {
 
     /** Normalize all channel/share payloads into the active conversation draft. */
     private async handleIncomingContent(data: any, contentType: string): Promise<void> {
-        await this.sessionReady;
+        await this.whenSessionReady();
         try {
             const files: File[] = [];
             if (Array.isArray(data?.files)) {

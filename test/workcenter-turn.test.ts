@@ -23,6 +23,28 @@ const requestWithPdf = (file: File): WorkCenterTurnRequest => ({
     options: { outputFormat: "markdown" }
 });
 
+test("assistant history uses output_text, not input_text", async () => {
+    const built = await buildWorkCenterTurnInput({
+        messages: [
+            { role: "user", content: "Hello" },
+            { role: "assistant", content: "Hi there" },
+            { role: "user", content: "Again" }
+        ],
+        attachments: [],
+        instruction: "Answer briefly",
+        options: { outputFormat: "markdown" }
+    });
+    const assistant = built.input.find((item) => item.role === "assistant");
+    const parts = (assistant?.content || []) as Array<Record<string, string>>;
+    assert.equal(parts[0]?.type, "output_text");
+    assert.equal(parts[0]?.text, "Hi there");
+    const users = built.input.filter((item) => item.role === "user");
+    for (const user of users) {
+        const userParts = (user.content || []) as Array<Record<string, string>>;
+        assert.ok(userParts.every((part) => part.type !== "output_text"));
+    }
+});
+
 test("eligible PDF becomes an input_file response part", async () => {
     const request = requestWithPdf(new File(["PDF"], "report.pdf", {
         type: "application/pdf"

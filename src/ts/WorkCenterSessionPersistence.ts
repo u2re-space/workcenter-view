@@ -8,7 +8,8 @@
  */
 import { createContentAddressedStore, type ContentAddressedStore } from "@fest-lib/lure";
 import {
-    pickRichestSessionSnapshot,
+    resolveLoadedSessionSnapshot,
+    sessionSnapshotHasContent,
     type WorkCenterSessionPersistence,
     type WorkCenterSessionSnapshot
 } from "./WorkCenterSession";
@@ -102,30 +103,42 @@ const writeIdbSnapshot = async (snapshot: WorkCenterSessionSnapshot | null): Pro
     });
 };
 
+const withTimeout = <T>(task: Promise<T>, ms: number, fallback: T): Promise<T> =>
+    Promise.race([
+        task,
+        new Promise<T>((resolve) => {
+            setTimeout(() => resolve(fallback), ms);
+        })
+    ]);
+
 export const createWorkCenterSessionPersistence = (
     store: ContentAddressedStore = createContentAddressedStore(WORKCENTER_OPFS_NAMESPACE)
 ): WorkCenterSessionPersistence => ({
     load: async () => {
-        const [opfs, idb] = await Promise.all([
+        const local = readLocalSnapshot();
+        const idb = await withTimeout(readIdbSnapshot(), 200, null);
+        const quick = resolveLoadedSessionSnapshot(local, idb, null);
+        /* INVARIANT: LS/IDB are SoT. Skip OPFS when they already have the chat. */
+        if (sessionSnapshotHasContent(quick)) return quick;
+        /* WHY: OPFS worker on process.u2re.space often times out; do not block chips/chat on it. */
+        const opfs = await withTimeout(
             store.readJson<WorkCenterSessionSnapshot>(MANIFEST_PATH).catch(() => null),
-            readIdbSnapshot()
-        ]);
-        return pickRichestSessionSnapshot(opfs, idb, readLocalSnapshot());
+            400,
+            null
+        );
+        return resolveLoadedSessionSnapshot(local, idb, opfs);
     },
     save: async (snapshot) => {
         /* Sync LS first — process PWA can die before OPFS worker finishes. */
         writeLocalSnapshot(snapshot);
-        await Promise.allSettled([
-            writeIdbSnapshot(snapshot).catch(() => undefined),
-            store.writeJson(MANIFEST_PATH, snapshot)
-        ]);
+        await withTimeout(writeIdbSnapshot(snapshot).catch(() => undefined), 250, undefined);
+        /* WHY: OPFS writeJson hangs on process.u2re.space; awaiting it blocked persistTail and hydrate. */
+        void store.writeJson(MANIFEST_PATH, snapshot).catch(() => undefined);
     },
     clear: async () => {
         writeLocalSnapshot(null);
-        await Promise.allSettled([
-            writeIdbSnapshot(null).catch(() => undefined),
-            store.clear()
-        ]);
+        await withTimeout(writeIdbSnapshot(null).catch(() => undefined), 250, undefined);
+        void store.clear().catch(() => undefined);
     }
 });
 

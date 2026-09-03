@@ -28,7 +28,8 @@ const globals = [
     "File",
     "Blob",
     "DOMException",
-    "URL"
+    "URL",
+    "localStorage"
 ] as const;
 
 for (const name of globals) {

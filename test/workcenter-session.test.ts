@@ -4,6 +4,7 @@ import test from "node:test";
 import "./dom-shim";
 import {
     pickRichestSessionSnapshot,
+    resolveLoadedSessionSnapshot,
     WorkCenterSession,
     type WorkCenterSessionPersistence,
     type WorkCenterSessionSnapshot
@@ -165,6 +166,135 @@ test("attachment preparation errors stay attached to the submitted user turn", a
         session.snapshot().messages[0]?.attachments[0]?.error,
         "Unreadable PDF"
     );
+});
+
+test("persistDraft before hydrate does not wipe a saved transcript", async () => {
+    const persistence = createMemoryPersistence();
+    persistence.saved = {
+        version: 1,
+        epoch: 0,
+        draft: { content: "", attachments: [] },
+        messages: [
+            {
+                id: "user-1",
+                role: "user",
+                createdAt: 1,
+                content: "keep me",
+                attachments: [],
+                status: "complete"
+            },
+            {
+                id: "asst-1",
+                role: "assistant",
+                createdAt: 2,
+                content: "### Answer",
+                attachments: [],
+                status: "complete"
+            }
+        ]
+    };
+    const session = new WorkCenterSession(persistence);
+    await session.persistDraft();
+    assert.equal(persistence.saved?.messages[0]?.content, "keep me");
+    await session.hydrate();
+    assert.equal(session.snapshot().messages[1]?.content, "### Answer");
+    assert.equal(persistence.saved?.messages[1]?.content, "### Answer");
+});
+
+test("empty persist cannot race past a pending hydrate", async () => {
+    let releaseLoad!: () => void;
+    const hangLoad = new Promise<void>((resolve) => {
+        releaseLoad = resolve;
+    });
+    const saved: WorkCenterSessionSnapshot = {
+        version: 1,
+        epoch: 0,
+        draft: { content: "", attachments: [] },
+        messages: [{
+            id: "user-1",
+            role: "user",
+            createdAt: 1,
+            content: "keep me",
+            attachments: [],
+            status: "complete"
+        }]
+    };
+    const persistence = {
+        saved,
+        async load() {
+            await hangLoad;
+            return structuredClone(this.saved);
+        },
+        async save(snapshot: WorkCenterSessionSnapshot) {
+            this.saved = structuredClone(snapshot);
+        },
+        async clear() {
+            this.saved = saved;
+        }
+    };
+    const session = new WorkCenterSession(persistence);
+    const hydrateP = session.hydrate();
+    await session.persistDraft();
+    releaseLoad();
+    await hydrateP;
+    assert.equal(persistence.saved.messages[0]?.content, "keep me");
+});
+
+test("hydrate returns even when save hangs", async () => {
+    const persistence: WorkCenterSessionPersistence = {
+        async load() {
+            return {
+                version: 1,
+                epoch: 0,
+                draft: { content: "", attachments: [] },
+                messages: [{
+                    id: "user-1",
+                    role: "user",
+                    createdAt: 1,
+                    content: "keep me",
+                    attachments: [],
+                    status: "complete"
+                }]
+            };
+        },
+        async save() {
+            await new Promise(() => {});
+        },
+        async clear() {}
+    };
+    const session = new WorkCenterSession(persistence);
+    const snapshot = await Promise.race([
+        session.hydrate(),
+        new Promise<never>((_, reject) => {
+            setTimeout(() => reject(new Error("hydrate hung on save")), 200);
+        })
+    ]);
+    assert.equal(snapshot.messages[0]?.content, "keep me");
+});
+
+test("LS transcript wins over empty higher-epoch OPFS", () => {
+    const local: WorkCenterSessionSnapshot = {
+        version: 1,
+        epoch: 0,
+        draft: { content: "", attachments: [] },
+        messages: [{
+            id: "user-1",
+            role: "user",
+            createdAt: 1,
+            content: "keep me",
+            attachments: [],
+            status: "complete"
+        }]
+    };
+    const opfs: WorkCenterSessionSnapshot = {
+        version: 1,
+        epoch: 1,
+        draft: { content: "", attachments: [] },
+        messages: []
+    };
+    const loaded = resolveLoadedSessionSnapshot(local, null, opfs);
+    assert.equal(loaded?.messages[0]?.content, "keep me");
+    assert.equal(loaded?.epoch, 0);
 });
 
 test("hydrate does not replace a live pending turn with a stale snapshot", async () => {

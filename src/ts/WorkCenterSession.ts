@@ -104,6 +104,14 @@ const isSnapshot = (value: unknown): value is WorkCenterSessionSnapshot => {
         Array.isArray(candidate.draft.attachments);
 };
 
+export const sessionSnapshotHasContent = (snapshot: WorkCenterSessionSnapshot | null): boolean =>
+    Boolean(
+        snapshot &&
+            (snapshot.messages.length > 0 ||
+                snapshot.draft.attachments.length > 0 ||
+                Boolean(snapshot.draft.content.trim()))
+    );
+
 /** Higher epoch wins (New chat). Same epoch: longer transcript, then draft attachments. */
 export const rankSessionSnapshot = (snapshot: WorkCenterSessionSnapshot | null): number => {
     if (!isSnapshot(snapshot)) return -1;
@@ -129,6 +137,17 @@ export const pickRichestSessionSnapshot = (
     return best;
 };
 
+/** LS/IDB beat a stale empty higher-epoch OPFS snapshot. */
+export const resolveLoadedSessionSnapshot = (
+    local: WorkCenterSessionSnapshot | null,
+    idb: WorkCenterSessionSnapshot | null,
+    opfs: WorkCenterSessionSnapshot | null
+): WorkCenterSessionSnapshot | null => {
+    const quick = pickRichestSessionSnapshot(idb, local);
+    if (sessionSnapshotHasContent(quick)) return quick;
+    return pickRichestSessionSnapshot(opfs, quick);
+};
+
 export type AssistantCompletion = Pick<WorkCenterMessage, "status"> &
     Partial<Pick<WorkCenterMessage, "content" | "rawResult" | "error">>;
 
@@ -139,6 +158,7 @@ export class WorkCenterSession {
     private persistTail: Promise<void> = Promise.resolve();
     private lastPersistedEpoch = 0;
     private lastPersistedMessageCount = 0;
+    private hydrated = false;
 
     constructor(private readonly persistence: WorkCenterSessionPersistence) {}
 
@@ -147,12 +167,24 @@ export class WorkCenterSession {
         // WHY: OPFS load can resolve after Send already committed a live turn.
         // Replacing that transcript paints Thinking… after GPT already finished.
         if (this.state.messages.length > 0) {
+            this.markHydrated();
             return this.snapshot();
         }
         this.state = isSnapshot(restored) ? cloneSnapshot(restored) : emptySnapshot();
+        this.markHydrated();
+        /* WHY: remounts used to persist an empty draft before load and wipe LS.
+         * Do not await — OPFS write on process.u2re.space can hang and leave the UI empty. */
+        if (this.state.messages.length > 0) {
+            void this.persist().catch(() => undefined);
+        }
+        return this.snapshot();
+    }
+
+    private markHydrated(): void {
+        this.hydrated = true;
         this.lastPersistedEpoch = this.state.epoch;
         this.lastPersistedMessageCount = this.state.messages.length;
-        return this.snapshot();
+        this.persistGeneration += 1;
     }
 
     snapshot(): WorkCenterSessionSnapshot {
@@ -337,6 +369,9 @@ export class WorkCenterSession {
     }
 
     private persist(opts?: { allowEmpty?: boolean }): Promise<void> {
+        if (!this.hydrated && !opts?.allowEmpty) {
+            return this.persistTail;
+        }
         const generation = ++this.persistGeneration;
         const snapshot = this.snapshot();
         this.persistTail = this.persistTail

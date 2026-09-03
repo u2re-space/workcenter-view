@@ -5,7 +5,7 @@
  */
 
 import { takeSkuHandoff } from "com/config/ecosystem-skus";
-import { flushHeldIngressToWorkCenter, peekHeldIngressFiles } from "com/routing/channel/sku-ingress";
+import { flushHeldIngressToWorkCenter, peekHeldIngressFiles, registerWorkCenterFlushHost } from "com/routing/channel/sku-ingress";
 import { loadAsAdopted, removeAdopted } from "@fest-lib/style-lib";
 import { type BaseViewOptions } from "views/types";
 import { queryLiveWorkCenterChats, WorkCenterManager } from "./ts/WorkCenter";
@@ -86,6 +86,7 @@ export class WorkCenterView extends UIElement implements View {
     private pendingMessages: WorkCenterInboundMessage[] = [];
     /** True after this instance acquired a refcount on the shared workcenter document stylesheet. */
     private leasedDocumentStyles = false;
+    private unbindFlushHost: (() => void) | null = null;
 
     lifecycle: ViewLifecycle = {
         onMount: () => this.onMount(),
@@ -145,7 +146,8 @@ export class WorkCenterView extends UIElement implements View {
 
     /** Shell passes `ViewOptions`; GLitElement passes a `WeakRef` — ignore the latter for option merging. */
     render = (weakOrOptions?: unknown): HTMLElement => {
-        const options = this.isGlitterWeakRef(weakOrOptions) ? undefined : (weakOrOptions as ViewOptions | undefined);
+        const fromGlit = this.isGlitterWeakRef(weakOrOptions);
+        const options = fromGlit ? undefined : (weakOrOptions as ViewOptions | undefined);
         if (options) {
             this.options = { ...this.options, ...options };
             this.shellContext = options.shellContext || this.shellContext;
@@ -156,6 +158,7 @@ export class WorkCenterView extends UIElement implements View {
             this.applyInitialOptions();
             this.initializedFromOptions = true;
         }
+        this.unbindFlushHost ??= registerWorkCenterFlushHost(this);
 
         /* WHY: Window-frame path never connects `cw-workcenter-view`, so `onInitialize`/`onMount` run only after this subtree exists unless we load early. */
         this.leaseWorkCenterDocumentStyles();
@@ -168,7 +171,7 @@ export class WorkCenterView extends UIElement implements View {
             this.syncPromptInputFromState();
             this.setupProcessResultObserver();
             this.emitFilesChanged();
-            return live;
+            return this.hostForShell(fromGlit);
         }
 
         this.element = this.manager.renderWorkCenterView();
@@ -176,12 +179,29 @@ export class WorkCenterView extends UIElement implements View {
         this.setupProcessResultObserver();
         this.emitFilesChanged();
         /**
-         * Defer ingress to `onShow`/rAF — not `queueMicrotask` before shell attach — so `requestRender`
-         * handlers see a connected root. WHY: flushing here triggered `replaceChild` upgrades while `ShellBase`
-         * still caches the pre-replacement node, breaking reopen/navigation (`loadedViews.element` stale).
+         * Return the CE to the shell. GLit gets a `<slot>` so the chat stays in light DOM.
+         * WHY: share/flush/`querySelector("cw-workcenter-view")` missed the disconnected host
+         * while the visible tree was only `.workcenter-chat`.
          */
-        return this.element;
-    };
+        return this.hostForShell(fromGlit);
+    }
+
+    /** Shell mounts this host; GLit projects light-DOM chat through a shadow slot. */
+    private hostForShell(fromGlit: boolean): HTMLElement {
+        this.style.display = "flex";
+        this.style.flexDirection = "column";
+        this.style.flex = "1";
+        this.style.minHeight = "0";
+        this.style.height = "100%";
+        if (this.element && this.element.parentNode !== this) {
+            this.replaceChildren(this.element);
+        }
+        if (fromGlit) {
+            const slot = document.createElement("slot");
+            return slot;
+        }
+        return this;
+    }
 
     getToolbar(): HTMLElement | null {
         return null;
@@ -528,6 +548,8 @@ export class WorkCenterView extends UIElement implements View {
 
     private onUnmount(): void {
         window.removeEventListener("cwsp:process-open", this.onProcessOpen);
+        this.unbindFlushHost?.();
+        this.unbindFlushHost = null;
         this.resultObserver?.disconnect();
         this.resultObserver = null;
         this.manager?.destroy();
