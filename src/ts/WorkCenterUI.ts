@@ -11,8 +11,8 @@ import type { WorkCenterPrompts } from "./WorkCenterPrompts";
 import type { WorkCenterResults } from "./WorkCenterResults";
 import type { WorkCenterHistory } from "./WorkCenterHistory";
 import type { WorkCenterAttachmentRef, WorkCenterDraft, WorkCenterMessage } from "./WorkCenterSession";
-import { highlightCodeTree } from "../../../../projects/fl.ui/src/ui/markdown/highlight";
-import { renderSafeMarkdown } from "../../../../projects/fl.ui/src/ui/markdown/render";
+import { highlightCodeTree } from "@fest-lib/fl-ui/markdown/highlight";
+import { renderSafeMarkdown } from "@fest-lib/fl-ui/markdown/render";
 
 export type WorkCenterAttachmentPresentation = {
     fileFor(ref: WorkCenterAttachmentRef): File | null;

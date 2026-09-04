@@ -16,7 +16,7 @@ import {
 } from "./WorkCenterSession";
 import type { WorkCenterAttachmentIngress } from "./WorkCenterAttachmentIngress";
 import type { WorkCenterDocumentPreparer } from "./WorkCenterDocumentPreparation";
-import { highlightCodeTree } from "../../../../projects/fl.ui/src/ui/markdown/highlight";
+import { highlightCodeTree } from "@fest-lib/fl-ui/markdown/highlight";
 
 export type WorkCenterConversationServices = {
     session: WorkCenterSession;

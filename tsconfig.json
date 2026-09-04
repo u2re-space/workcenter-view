@@ -57,6 +57,12 @@
             "@fest-lib/fl-ui": [
                 "../../projects/fl.ui/src/index.ts"
             ],
+            "@fest-lib/fl-ui/markdown/highlight": [
+                "../../projects/fl.ui/src/ui/markdown/highlight.ts"
+            ],
+            "@fest-lib/fl-ui/markdown/render": [
+                "../../projects/fl.ui/src/ui/markdown/render.ts"
+            ],
             "@fest-lib/image": [
                 "../../projects/image.ts/src/index.ts"
             ],

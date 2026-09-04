@@ -1,5 +1,5 @@
 import { H } from "@fest-lib/lure";
-import { highlightCodeTree } from "../../../../projects/fl.ui/src/ui/markdown/highlight";
+import { highlightCodeTree } from "@fest-lib/fl-ui/markdown/highlight";
 import type { WorkCenterState, WorkCenterDependencies } from "./WorkCenterState";
 import type { WorkCenterDataProcessing } from "./WorkCenterDataProcessing";
 
