@@ -320,7 +320,9 @@
         background: var(--color-surface-container);
         box-shadow: var(--elev-1);
         transition: background-color var(--transition-fast), box-shadow var(--transition-fast);
-        position: relative;
+        position: sticky;
+        inset: auto;
+        inset-block-end: calc(var(--virtual-keyboard-height, env(keyboard-inset-height, 0px)) + env(safe-area-inset-bottom, 0px));
         min-block-size: var(--wc-composer-min, 4.5rem);
         block-size: max-content;
         max-block-size: min(72dvh, 75%);
@@ -341,10 +343,13 @@
         position: absolute;
         inset-block-start: 0;
         inset-inline: 0;
-        z-index: 1;
-        block-size: 0.85rem;
+        z-index: 4;
+        /* WHY: 0.85rem is mouse-only; Capacitor needs a finger-sized grab. */
+        block-size: max(2.5rem, var(--touch-min, 2.75rem));
         cursor: ns-resize;
         touch-action: none;
+        -webkit-user-select: none;
+        user-select: none;
 
         &::before {
             content: "";
@@ -443,7 +448,7 @@
 
     .workcenter-chat .prompt-input {
         flex: 1 1 auto;
-        flex-basis: auto;
+        flex-basis: stretch;
         min-inline-size: 0;
         min-block-size: max(var(--touch-min, 100%), 100%);
         max-block-size: stretch;//min(28rem, 55dvh);
@@ -459,6 +464,8 @@
         block-size: fit-content;
         overflow-y: auto;
         resize: none;
+        z-index: 9;
+        margin-block-start: 0.5rem;
 
         &:hover,
         &:focus {

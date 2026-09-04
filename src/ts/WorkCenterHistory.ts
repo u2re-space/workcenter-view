@@ -1,3 +1,8 @@
+/**
+ * Work Center action-history list and overlay.
+ *
+ * FIND:workcenter-action-history
+ */
 import { H } from "@fest-lib/lure";
 import { actionHistory } from "com/service/misc/ActionHistory";
 import type { ActionEntry } from "com/service/misc/ActionHistory";
@@ -172,20 +177,36 @@ export class WorkCenterHistory {
       </div>
     </div>` as HTMLElement;
 
-        // Add event listeners
+        /* WHY: backdrop is `.action-history-modal`; only `.modal-content` is the
+         * dialog. A click outside the card (the dimmed field) must remove the
+         * whole overlay. Skip focusin — `confirm()` and native <select>
+         * pickers steal focus and would dismiss the modal. */
+        const closeModal = (): void => {
+            window.removeEventListener("keydown", onKey);
+            modal.remove();
+        };
+        const onKey = (event: KeyboardEvent): void => {
+            if (event.key === "Escape") closeModal();
+        };
+        window.addEventListener("keydown", onKey);
+
         modal.addEventListener('click', (e) => {
             const target = e.target as HTMLElement;
+            if (!target.closest('.modal-content')) {
+                closeModal();
+                return;
+            }
             const action = target.getAttribute('data-action') || target.closest('[data-action]')?.getAttribute('data-action');
             const entryId = target.getAttribute('data-restore-action') || target.getAttribute('data-view-details');
 
             if (action === 'close-modal') {
-                modal.remove();
+                closeModal();
             } else if (action === 'export-history') {
                 this.exportActionHistory();
             } else if (action === 'clear-history') {
                 if (confirm('Are you sure you want to clear all action history?')) {
                     actionHistory.clearEntries();
-                    modal.remove();
+                    closeModal();
                     this.updateRecentHistory({} as WorkCenterState);
                 }
             } else if (entryId) {
@@ -194,7 +215,7 @@ export class WorkCenterHistory {
                     if (target.hasAttribute('data-restore-action') && entry.result) {
                         // Restore result to output - this will be handled by results module
                         this.deps.showMessage?.('Result restored from history');
-                        modal.remove();
+                        closeModal();
                     } else if (target.hasAttribute('data-view-details')) {
                         this.showActionDetails(entry);
                     }

@@ -7,6 +7,7 @@
 import { takeSkuHandoff } from "com/config/ecosystem-skus";
 import { flushHeldIngressToWorkCenter, peekHeldIngressFiles, registerWorkCenterFlushHost } from "com/routing/channel/sku-ingress";
 import { loadAsAdopted, removeAdopted } from "@fest-lib/style-lib";
+import { ensureViewportTracking } from "@fest-lib/dom";
 import { type BaseViewOptions } from "views/types";
 import { queryLiveWorkCenterChats, WorkCenterManager } from "./ts/WorkCenter";
 import type { WorkCenterDependencies } from "./ts/WorkCenterState";
@@ -154,6 +155,11 @@ export class WorkCenterView extends UIElement implements View {
         }
 
         this.manager ??= new WorkCenterManager(this.deps);
+        try {
+            ensureViewportTracking();
+        } catch {
+            /* viewport IME tracking optional */
+        }
         if (!this.initializedFromOptions) {
             this.applyInitialOptions();
             this.initializedFromOptions = true;
@@ -543,6 +549,11 @@ export class WorkCenterView extends UIElement implements View {
 
     private onMount(): void {
         this.leaseWorkCenterDocumentStyles();
+        try {
+            ensureViewportTracking();
+        } catch {
+            /* viewport IME tracking optional */
+        }
         window.addEventListener("cwsp:process-open", this.onProcessOpen);
     }
 

@@ -259,6 +259,44 @@ export class WorkCenterEvents {
             void this.templates.applyInstruction(this.state, instruction.value);
             WorkCenterStateManager.saveState(this.state);
         });
+
+        this.bindPopoverDismiss(
+            root,
+            "[data-workcenter-request-options]",
+            '[data-action="open-request-options"]'
+        );
+        this.bindPopoverDismiss(
+            root,
+            "[data-workcenter-secondary]",
+            '[data-action="open-secondary"]'
+        );
+    }
+
+    /* WHY: opener is a toggle; dismiss uses capture + composedPath so a
+     * composer click (or focus leaving the popover) hides it without a second
+     * tap, including when the chat lives in a shadow root. */
+    private bindPopoverDismiss(root: HTMLElement, panelSelector: string, triggerSelector: string): void {
+        const hidePanel = (): void => {
+            const panel = root.querySelector(panelSelector) as HTMLElement | null;
+            if (!panel || panel.hidden) return;
+            panel.hidden = true;
+            root.querySelector(triggerSelector)?.setAttribute("aria-expanded", "false");
+        };
+        const hideIfOutside = (event: Event): void => {
+            const panel = root.querySelector(panelSelector) as HTMLElement | null;
+            if (!panel || panel.hidden) return;
+            const path = event.composedPath();
+            if (path.includes(panel)) return;
+            const trigger = root.querySelector(triggerSelector);
+            if (trigger && path.includes(trigger)) return;
+            hidePanel();
+        };
+        window.addEventListener("pointerdown", hideIfOutside, true);
+        window.addEventListener("focusin", hideIfOutside, true);
+        root.addEventListener("keydown", (event) => {
+            if (event.key !== "Escape") return;
+            hidePanel();
+        });
     }
 
     private setupVoiceInput(root: HTMLElement): void {
@@ -355,28 +393,75 @@ export class WorkCenterEvents {
         const composer = root.querySelector("[data-workcenter-composer]") as HTMLElement | null;
         if (!handle || !composer) return;
 
+        /* WHY: Capacitor/Android loses `pointermove` on the 0.85rem strip (no capture,
+         * `button !== 0` can drop touch). Track on window; accept primary touch. */
+        const applyHeight = (clientY: number, startY: number, startHeight: number, limit: number): void => {
+            const next = Math.min(limit, Math.max(72, startHeight + (startY - clientY)));
+            composer.style.setProperty("--wc-composer-min", `${next}px`);
+            syncWorkCenterComposerHeight(root);
+        };
+
+        let pointerDrag = false;
         handle.addEventListener("pointerdown", (event) => {
-            if (event.button !== 0) return;
+            if (event.isPrimary === false) return;
+            if (event.pointerType === "mouse" && event.button !== 0) return;
+            pointerDrag = true;
             event.preventDefault();
-            handle.setPointerCapture?.(event.pointerId);
+            event.stopPropagation();
+            try {
+                handle.setPointerCapture?.(event.pointerId);
+            } catch {
+                /* WebView may reject capture */
+            }
             const startY = event.clientY;
             const startHeight = composer.getBoundingClientRect().height;
             const hostHeight = root.getBoundingClientRect().height || startHeight;
             const limit = Math.max(96, hostHeight * 0.75);
             const onMove = (move: PointerEvent) => {
-                const next = Math.min(limit, Math.max(72, startHeight + (startY - move.clientY)));
-                composer.style.setProperty("--wc-composer-min", `${next}px`);
-                syncWorkCenterComposerHeight(root);
+                if (move.pointerId !== event.pointerId) return;
+                move.preventDefault();
+                applyHeight(move.clientY, startY, startHeight, limit);
+            };
+            const onUp = (up: PointerEvent) => {
+                if (up.pointerId !== event.pointerId) return;
+                pointerDrag = false;
+                window.removeEventListener("pointermove", onMove);
+                window.removeEventListener("pointerup", onUp);
+                window.removeEventListener("pointercancel", onUp);
+                try {
+                    handle.releasePointerCapture?.(event.pointerId);
+                } catch {
+                    /* already released */
+                }
+            };
+            window.addEventListener("pointermove", onMove, { passive: false });
+            window.addEventListener("pointerup", onUp);
+            window.addEventListener("pointercancel", onUp);
+        }, { passive: false });
+
+        handle.addEventListener("touchstart", (event) => {
+            if (pointerDrag || event.touches.length !== 1) return;
+            event.preventDefault();
+            event.stopPropagation();
+            const startY = event.touches[0].clientY;
+            const startHeight = composer.getBoundingClientRect().height;
+            const hostHeight = root.getBoundingClientRect().height || startHeight;
+            const limit = Math.max(96, hostHeight * 0.75);
+            const onMove = (move: TouchEvent) => {
+                const touch = move.touches[0];
+                if (!touch) return;
+                move.preventDefault();
+                applyHeight(touch.clientY, startY, startHeight, limit);
             };
             const onUp = () => {
-                handle.removeEventListener("pointermove", onMove);
-                handle.removeEventListener("pointerup", onUp);
-                handle.removeEventListener("pointercancel", onUp);
+                window.removeEventListener("touchmove", onMove);
+                window.removeEventListener("touchend", onUp);
+                window.removeEventListener("touchcancel", onUp);
             };
-            handle.addEventListener("pointermove", onMove);
-            handle.addEventListener("pointerup", onUp);
-            handle.addEventListener("pointercancel", onUp);
-        });
+            window.addEventListener("touchmove", onMove, { passive: false });
+            window.addEventListener("touchend", onUp);
+            window.addEventListener("touchcancel", onUp);
+        }, { passive: false });
     }
 
     private findAttachment(hash: string): WorkCenterAttachmentRef | null {
