@@ -1,5 +1,5 @@
 import { marked } from "marked";
-import DOMPurify from 'dompurify';
+import { renderSafeMarkdown } from "../../../../projects/fl.ui/src/ui/markdown/render";
 import { extractJSONFromAIResponse } from "core/document/AIResponseParser";
 import { writeText as writeClipboardText } from "core/modules/Clipboard";
 
@@ -319,7 +319,7 @@ export class WorkCenterDataProcessing {
         const content = this.extractContentItems(data).join('\n\n').trim() || this.extractTextContent(data);
         const code = this.extractLikelyCode(content);
         const language = this.detectCodeLanguage(content);
-        return `<pre class="code-result"><code data-lang="${this.escapeHtml(language)}">${this.escapeHtml(code)}</code></pre>`;
+        return `<pre class="code-result" data-language="${this.escapeHtml(language)}"><code data-language="${this.escapeHtml(language)}" data-lang="${this.escapeHtml(language)}" class="language-${this.escapeHtml(language)}">${this.escapeHtml(code)}</code></pre>`;
     }
 
     private renderAsMarkdown(data: any): string {
@@ -329,8 +329,7 @@ export class WorkCenterDataProcessing {
         if (!renderedContent.trim()) {
             try {
                 const textContent = this.extractTextContent(data);
-                const html = marked.parse(textContent) as string;
-                return DOMPurify.sanitize(html);
+                return renderSafeMarkdown(textContent);
             } catch (error) {
                 console.warn('Markdown parsing failed, falling back to simple rendering:', error);
                 return this.renderMathAsHTML(renderedContent as string);
@@ -338,8 +337,7 @@ export class WorkCenterDataProcessing {
         }
 
         try {
-            const html = marked.parse(renderedContent) as string;
-            return DOMPurify.sanitize(html);
+            return renderSafeMarkdown(renderedContent);
         } catch (error) {
             console.warn('Markdown parsing failed, falling back to simple rendering:', error);
             return this.renderMathAsHTML(renderedContent as string);

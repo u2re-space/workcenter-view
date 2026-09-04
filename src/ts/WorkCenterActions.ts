@@ -16,6 +16,7 @@ import {
 } from "./WorkCenterSession";
 import type { WorkCenterAttachmentIngress } from "./WorkCenterAttachmentIngress";
 import type { WorkCenterDocumentPreparer } from "./WorkCenterDocumentPreparation";
+import { highlightCodeTree } from "../../../../projects/fl.ui/src/ui/markdown/highlight";
 
 export type WorkCenterConversationServices = {
     session: WorkCenterSession;
@@ -176,6 +177,7 @@ export class WorkCenterActions {
             const outputContent = this.ui.getContainer()?.querySelector('[data-output]') as HTMLElement | null;
             if (outputContent) {
                 outputContent.innerHTML = `<div class="result-content">${formattedResult}</div>`;
+                highlightCodeTree(outputContent);
             }
 
             // Update recognized data if files were processed (initial recognition or source data)

@@ -11,6 +11,7 @@ import type { WorkCenterPrompts } from "./WorkCenterPrompts";
 import type { WorkCenterResults } from "./WorkCenterResults";
 import type { WorkCenterHistory } from "./WorkCenterHistory";
 import type { WorkCenterAttachmentRef, WorkCenterDraft, WorkCenterMessage } from "./WorkCenterSession";
+import { highlightCodeTree } from "../../../../projects/fl.ui/src/ui/markdown/highlight";
 import { renderSafeMarkdown } from "../../../../projects/fl.ui/src/ui/markdown/render";
 
 export type WorkCenterAttachmentPresentation = {
@@ -193,6 +194,7 @@ const appendMessage = (
     body.className = "workcenter-message__body";
     if (message.role === "assistant" && message.status === "complete") {
         body.innerHTML = renderSafeMarkdown(message.content);
+        highlightCodeTree(body);
     } else if (message.status === "pending") {
         body.textContent = "Thinking…";
         body.setAttribute("aria-busy", "true");

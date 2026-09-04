@@ -1,4 +1,5 @@
 import { H } from "@fest-lib/lure";
+import { highlightCodeTree } from "../../../../projects/fl.ui/src/ui/markdown/highlight";
 import type { WorkCenterState, WorkCenterDependencies } from "./WorkCenterState";
 import type { WorkCenterDataProcessing } from "./WorkCenterDataProcessing";
 
@@ -34,6 +35,7 @@ export class WorkCenterResults {
 
         const formattedResult = this.dataProcessing.formatResult(state.lastRawResult, state.outputFormat);
         outputContent.innerHTML = `<div class="result-content">${formattedResult}</div>`;
+        highlightCodeTree(outputContent);
     }
 
     showError(error: string): void {
@@ -188,6 +190,7 @@ export class WorkCenterResults {
             if (outputContent) {
                 const formattedResult = this.dataProcessing.formatResult({ content: step.content }, state.outputFormat);
                 outputContent.innerHTML = `<div class="result-content">${formattedResult}</div>`;
+                highlightCodeTree(outputContent);
                 state.lastRawResult = { data: step.content };
             }
         }

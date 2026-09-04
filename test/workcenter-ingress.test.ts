@@ -73,6 +73,14 @@ test("safe Markdown renderer removes executable markup", () => {
     assert.doesNotMatch(html, /script|window\.bad/i);
 });
 
+test("fenced code language is stamped on data-language", () => {
+    const html = renderSafeMarkdown("```ts\nconst x = 1;\n```");
+
+    assert.match(html, /data-language="ts"/);
+    assert.match(html, /class="language-ts"/);
+    assert.doesNotMatch(html, /<script/i);
+});
+
 test("document preparer preserves text, PDF, DOCX, and XLSX content locally", async () => {
     const embeddedImage = new File(["image"], "embedded.png", { type: "image/png" });
     const preparer = createWorkCenterDocumentPreparer({

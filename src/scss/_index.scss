@@ -14,6 +14,9 @@
 // PARTIALS (Order matters for cascade)
 // ============================================================================
 
+// 0. Shared code overlay (highlight.js paint + ::highlight)
+@use "veela-lib/ui/code-highlight";
+
 // 1. Utilities - shared keyframes and mixins
 @use "keyframes";
 @use "mixins";
