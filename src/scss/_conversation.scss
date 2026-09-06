@@ -321,8 +321,8 @@
         box-shadow: var(--elev-1);
         transition: background-color var(--transition-fast), box-shadow var(--transition-fast);
         position: sticky;
-        inset: auto;
-        inset-block-end: calc(var(--virtual-keyboard-height, env(keyboard-inset-height, 0px)) + env(safe-area-inset-bottom, 0px));
+        inset: auto; /* Don't know why now virtual keyboard height is not working correctly here */
+        inset-block-end: calc(0px + env(safe-area-inset-bottom, 0px));
         min-block-size: var(--wc-composer-min, 4.5rem);
         block-size: max-content;
         max-block-size: min(72dvh, 75%);
