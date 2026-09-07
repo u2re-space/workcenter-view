@@ -742,7 +742,7 @@ var Ie = (e) => {
 }, Re = class {
 	apiKey;
 	apiSecret;
-	apiUrl = "https://api.proxyapi.ru/openai/v1";
+	apiUrl = "https://api.proxyapi.ru/v1";
 	model = "gpt-5.6-luna";
 	responseId = null;
 	pending = [];
@@ -1177,7 +1177,7 @@ Expected output: { "processed": [...], "failed": [...] }
 	getResponse(e) {
 		return this?.responseMap?.get?.(e);
 	}
-}, ze = (e, t, n) => new Re(e, t || "https://api.proxyapi.ru/openai/v1", "", n || "gpt-5.6-luna"), Be = (e) => {
+}, ze = (e, t, n) => new Re(e, t || "https://api.proxyapi.ru/v1", "", n || "gpt-5.6-luna"), Be = (e) => {
 	if (!Array.isArray(e)) return [];
 	let t = [];
 	for (let n of e) {
@@ -1204,7 +1204,7 @@ Expected output: { "processed": [...], "failed": [...] }
 }, $ = async (e) => {
 	let n = await t(), r = e?.apiKey || n?.ai?.apiKey;
 	if (!r) return null;
-	let i = ze(r, e?.baseUrl || n?.ai?.baseUrl || "https://api.proxyapi.ru/openai/v1", He(e?.model || n?.ai?.model, e?.customModel || n?.ai?.customModel));
+	let i = ze(r, e?.baseUrl || n?.ai?.baseUrl || "https://api.proxyapi.ru/v1", He(e?.model || n?.ai?.model, e?.customModel || n?.ai?.customModel));
 	return await Ve(i, e?.mcp ?? n?.ai?.mcp), i;
 };
 function Ue(e) {
