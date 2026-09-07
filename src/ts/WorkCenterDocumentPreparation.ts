@@ -106,15 +106,32 @@ const extractDocx = async (file: File): Promise<DocumentExtraction> => {
     };
 };
 
+const cellText = (cell: unknown): string => {
+    if (cell == null) return "";
+    if (typeof cell === "object") {
+        const rec = cell as { text?: unknown; result?: unknown; richText?: Array<{ text?: string }> };
+        if (Array.isArray(rec.richText)) return rec.richText.map((part) => part.text ?? "").join("");
+        if (rec.text != null) return String(rec.text);
+        if (rec.result != null) return String(rec.result);
+    }
+    return String(cell);
+};
+
+/* WHY: community `xlsx` (SheetJS 0.18) has no fix for GHSA-4r6h-8v6p-xvw6 / GHSA-5pgg-2g8v-p4x9. */
 const extractXlsx = async (file: File): Promise<DocumentExtraction> => {
-    const xlsxModule = await import("xlsx");
-    const xlsx = (xlsxModule.default ?? xlsxModule) as typeof import("xlsx");
-    const workbook = xlsx.read(await file.arrayBuffer(), { type: "array" });
-    const sheets = workbook.SheetNames.map((name) => {
-        const sheet = workbook.Sheets[name];
-        const csv = sheet ? xlsx.utils.sheet_to_csv(sheet) : "";
-        return `## Sheet: ${name}\n${csv}`.trim();
-    }).filter(Boolean);
+    const excelMod = await import("exceljs");
+    const ExcelJS = (excelMod as { default?: typeof import("exceljs") }).default ?? excelMod;
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(await file.arrayBuffer());
+    const sheets: string[] = [];
+    workbook.eachSheet((sheet) => {
+        const rows: string[] = [];
+        sheet.eachRow({ includeEmpty: false }, (row) => {
+            const values = Array.isArray(row.values) ? row.values.slice(1) : [];
+            rows.push(values.map(cellText).join(","));
+        });
+        if (rows.length) sheets.push(`## Sheet: ${sheet.name}\n${rows.join("\n")}`);
+    });
     return { text: sheets.join("\n\n") };
 };
 
