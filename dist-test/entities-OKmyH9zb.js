@@ -743,7 +743,7 @@ var Ie = (e) => {
 	apiKey;
 	apiSecret;
 	apiUrl = "https://api.proxyapi.ru/v1";
-	model = "gpt-5.6-luna";
+	model = "gpt-6-luna";
 	responseId = null;
 	pending = [];
 	messages = [];
@@ -1177,7 +1177,7 @@ Expected output: { "processed": [...], "failed": [...] }
 	getResponse(e) {
 		return this?.responseMap?.get?.(e);
 	}
-}, ze = (e, t, n) => new Re(e, t || "https://api.proxyapi.ru/v1", "", n || "gpt-5.6-luna"), Be = (e) => {
+}, ze = (e, t, n) => new Re(e, t || "https://api.proxyapi.ru/v1", "", n || "gpt-6-luna"), Be = (e) => {
 	if (!Array.isArray(e)) return [];
 	let t = [];
 	for (let n of e) {
@@ -1200,7 +1200,7 @@ Expected output: { "processed": [...], "failed": [...] }
 	if (n.length) for (let t of n) await e.useMCP(t.serverLabel, t.origin, t.clientKey, t.secretKey);
 }, He = (e, t) => {
 	let n = String(e || "").trim(), r = String(t || "").trim();
-	return n === "custom" ? r || "gpt-5.6-luna" : n || r || "gpt-5.6-luna";
+	return n === "custom" ? r || "gpt-6-luna" : n || r || "gpt-6-luna";
 }, $ = async (e) => {
 	let n = await t(), r = e?.apiKey || n?.ai?.apiKey;
 	if (!r) return null;
