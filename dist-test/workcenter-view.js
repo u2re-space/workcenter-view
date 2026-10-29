@@ -28724,7 +28724,7 @@ var Xp = Yp, Zp = Symbol.for("image.canvas.blob");
 globalThis[Zp] ??= /* @__PURE__ */ new WeakMap();
 var Qp = globalThis[Zp], $p = Symbol.for("image.canvas.delayed");
 globalThis[$p] ??= /* @__PURE__ */ new Map([]), globalThis[$p];
-var em = Symbol.for("image.canvas.sheduler");
+var em = Symbol.for("image.canvas.schedulerRf");
 globalThis[em] ??= oe();
 var tm = globalThis[em], nm = Symbol.for("image.canvas.failedWallpaperSrc");
 globalThis[nm] ??= /* @__PURE__ */ new Set();
